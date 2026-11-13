@@ -1,0 +1,5 @@
+{
+  "//": "Repo-wide base. The real shared bases live in @h5/config so that apps and packages extend a published entry.",
+  "extends": "@h5/config/tsconfig.base.json",
+  "include": []
+}

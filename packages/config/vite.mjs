@@ -1,0 +1,94 @@
+import { resolve } from 'node:path'
+
+import legacy from '@vitejs/plugin-legacy'
+import vue from '@vitejs/plugin-vue'
+import { VantResolver } from '@vant/auto-import-resolver'
+import { visualizer } from 'rollup-plugin-visualizer'
+import Components from 'unplugin-vue-components/vite'
+import { defineConfig, loadEnv } from 'vite'
+
+import { createPostcssConfig } from './postcss.mjs'
+
+/** 最低系统版本：Android 8 / iOS 12 起步，legacy 产物用 SystemJS 兜底。 */
+export const LEGACY_TARGETS = [
+  'chrome >= 64',
+  'safari >= 12',
+  'ios >= 12',
+  'android >= 8',
+  'not dead',
+]
+
+function isEnabled(value) {
+  return value === '1' || value === 'true'
+}
+
+/**
+ * 每个业务 app 的共享 vite 配置。
+ * @param {{ appId: string, appVersion?: string, base?: string }} options
+ */
+export function createAppViteConfig(options) {
+  const { appId, appVersion = '0.0.0', base } = options ?? {}
+
+  if (!appId) {
+    throw new Error('[h5/config] createAppViteConfig requires a non-empty `appId`')
+  }
+
+  return defineConfig(({ mode }) => {
+    const env = loadEnv(mode, process.cwd(), '')
+    const analyze = isEnabled(env.ANALYZE) || isEnabled(process.env.ANALYZE)
+    const apiBaseUrl = env.VITE_API_BASE_URL
+
+    return {
+      base: base ?? env.VITE_CDN_BASE ?? '/',
+      plugins: [
+        vue(),
+        legacy({ targets: LEGACY_TARGETS }),
+        Components({ resolvers: [VantResolver()], dts: false, dirs: ['src/components'] }),
+        ...(analyze
+          ? [
+              visualizer({
+                filename: 'dist/stats.html',
+                template: 'treemap',
+                gzipSize: true,
+                brotliSize: true,
+              }),
+            ]
+          : []),
+      ],
+      resolve: {
+        alias: {
+          '@': resolve(process.cwd(), 'src'),
+        },
+      },
+      define: {
+        __APP_ID__: JSON.stringify(env.VITE_APP_ID || appId),
+        __APP_VERSION__: JSON.stringify(appVersion),
+        __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+      },
+      css: {
+        postcss: createPostcssConfig(),
+      },
+      server: {
+        host: true,
+        port: 5173,
+        strictPort: false,
+        historyApiFallback: true,
+        proxy: apiBaseUrl ? { '/api': { target: apiBaseUrl, changeOrigin: true } } : undefined,
+      },
+      build: {
+        target: 'es2020',
+        cssTarget: 'chrome64',
+        sourcemap: mode !== 'production',
+        rollupOptions: {
+          output: {
+            entryFileNames: 'assets/[name]-[hash].js',
+            chunkFileNames: 'assets/[name]-[hash].js',
+            assetFileNames: 'assets/[name]-[hash][extname]',
+          },
+        },
+      },
+    }
+  })
+}
+
+export default createAppViteConfig
