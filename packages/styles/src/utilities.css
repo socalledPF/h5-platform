@@ -1,0 +1,35 @@
+/**
+ * 1px 细线：伪元素 + scaleY(0.5)（设计文档 8.1）。
+ *
+ * 消费方只需加 class，宿主元素自身会变成 position: relative。
+ */
+.hairline-bottom,
+.hairline-top {
+  position: relative;
+}
+
+.hairline-bottom::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background-color: var(--color-border);
+  transform: scaleY(0.5);
+  transform-origin: 0 100%;
+  pointer-events: none;
+  content: '';
+}
+
+.hairline-top::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background-color: var(--color-border);
+  transform: scaleY(0.5);
+  transform-origin: 0 0;
+  pointer-events: none;
+  content: '';
+}

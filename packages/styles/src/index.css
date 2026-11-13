@@ -1,5 +1,12 @@
-:root {
-  --h5-color-primary: #1989fa;
-  --safe-top: env(safe-area-inset-top, 0px);
-  --safe-bottom: env(safe-area-inset-bottom, 0px);
-}
+/**
+ * @h5/styles 入口。
+ *
+ *   import '@h5/styles'
+ *
+ * 只有变量、重置、安全区与少量工具类，不含任何业务样式。
+ * 顺序：变量 -> 重置（重置会用到变量）-> 安全区 -> 工具类。
+ */
+@import './variables.css';
+@import './reset.css';
+@import './safe-area.css';
+@import './utilities.css';

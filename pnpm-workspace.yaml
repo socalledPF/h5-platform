@@ -9,6 +9,13 @@ allowBuilds:
   esbuild: true
   core-js: true
 
+# pnpm 12 会拒绝发布时间不足 24h 的版本（minimumReleaseAge 门禁）。
+# @vitejs/plugin-vue@6.0.11 发布于 2026-11-12T09:02Z，安装时还没过门禁，
+# 只能临时加入白名单才装得下来；该版本在 2026-11-13T09:02Z 满 24h，
+# 之后这一条（含本注释）可以整段删除，minimumReleaseAge 本身保持不变。
+minimumReleaseAgeExclude:
+  - '@vitejs/plugin-vue@6.0.11'
+
 onlyBuiltDependencies:
   - esbuild
   - core-js

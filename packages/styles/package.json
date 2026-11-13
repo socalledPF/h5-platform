@@ -3,14 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "//": "纯 CSS 包：入口即样式表，业务通过 import '@h5/styles' 引入；不产出 JS 类型。",
+  "main": "./src/index.css",
   "exports": {
-    ".": {
-      "types": "./src/index.ts",
-      "import": "./src/index.ts",
-      "default": "./src/index.ts"
-    },
+    ".": "./src/index.css",
+    "./variables.css": "./src/variables.css",
+    "./reset.css": "./src/reset.css",
+    "./safe-area.css": "./src/safe-area.css",
+    "./utilities.css": "./src/utilities.css",
     "./package.json": "./package.json"
   },
   "files": [

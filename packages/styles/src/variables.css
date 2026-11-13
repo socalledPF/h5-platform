@@ -1,0 +1,55 @@
+/**
+ * 设计变量：颜色 / 字号 / 间距 / 圆角 / 层级 / 导航高度。
+ *
+ * 设计稿基准 375 宽，这里一律写 px，由 app 构建时的 postcss（px -> vw）统一换算；
+ * 包的 CSS 里不写 vw，避免换算叠加。业务只允许使用这里定义的变量（设计文档 12.1）。
+ */
+:root {
+  /* 品牌色与语义色 */
+  --color-primary: #1989fa;
+  --color-danger: #ee0a24;
+  --color-success: #07c160;
+
+  /* 文字 */
+  --color-text: #323233;
+  --color-text-secondary: #646566;
+  --color-text-placeholder: #c8c9cc;
+
+  /* 背景与分割线 */
+  --color-bg: #ffffff;
+  --color-bg-page: #f7f8fa;
+  --color-border: #ebedf0;
+
+  /* 字号 */
+  --font-size-xs: 10px;
+  --font-size-sm: 12px;
+  --font-size-md: 14px;
+  --font-size-lg: 16px;
+  --font-size-xl: 18px;
+
+  /* 间距 */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+
+  /* 圆角 */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 8px;
+
+  /* 层级：导航栏 < 遮罩 < 轻提示 */
+  --z-nav: 100;
+  --z-mask: 1000;
+  --z-toast: 2000;
+
+  /* H5 模式导航栏内容高度（不含状态栏安全区） */
+  --nav-height: 44px;
+
+  /* 平板 / 折叠屏内容上限宽（设计文档 8.1）；固定定位的导航栏也按它对齐 */
+  --app-max-width: 600px;
+
+  /* 旧变量名保留为别名，避免已接入的页面失效 */
+  --h5-color-primary: var(--color-primary);
+}

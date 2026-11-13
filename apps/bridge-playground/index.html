@@ -8,9 +8,107 @@
     />
     <meta name="format-detection" content="telephone=no" />
     <title>Bridge 调试</title>
+
+    <!-- 资源预热（设计文档 10.2）：域名随部署环境注入，未定之前保留注释 -->
+    <!-- <link rel="preconnect" href="https://cdn.example.com" crossorigin /> -->
+
+    <style>
+      /*
+        首屏骨架屏（设计文档 10.2）：内联在 HTML 里，HTML 一到就渲染，不依赖 JS/CSS 下载与 Vue 挂载。
+        结构按本页布局摆位（导航栏 → 环境概要卡 → 事件日志块 → 方法卡列表），避免挂载时布局跳变。
+        颜色写成「变量 + 兜底值」，@h5/styles 加载前后视觉一致；app.mount('#app') 会清空容器，骨架随之消失。
+      */
+      .playground-skeleton {
+        box-sizing: border-box;
+        min-height: 100vh;
+        background-color: var(--color-bg-page, #f7f8fa);
+      }
+
+      .playground-skeleton__block {
+        display: block;
+        border-radius: 2px;
+        background-color: var(--color-border, #ebedf0);
+      }
+
+      .playground-skeleton__bar {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        height: 44px;
+        background-color: var(--color-bg, #ffffff);
+        border-bottom: 1px solid var(--color-border, #ebedf0);
+      }
+
+      .playground-skeleton__block--title {
+        width: 96px;
+        height: 14px;
+      }
+
+      .playground-skeleton__summary {
+        padding: 12px;
+        margin: 12px;
+        background-color: var(--color-bg, #ffffff);
+        border-radius: 8px;
+      }
+
+      .playground-skeleton__block--headline {
+        width: 40%;
+        height: 16px;
+      }
+
+      .playground-skeleton__line {
+        height: 12px;
+        border-radius: 2px;
+        background-color: var(--color-border, #ebedf0);
+      }
+
+      .playground-skeleton__line + .playground-skeleton__line {
+        margin-top: 8px;
+      }
+
+      .playground-skeleton__card {
+        padding: 12px;
+        margin: 0 12px 12px;
+        background-color: var(--color-bg, #ffffff);
+        border-radius: 8px;
+      }
+
+      .playground-skeleton__block--value {
+        width: 60%;
+        height: 40px;
+        margin-top: 8px;
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="playground-skeleton" aria-busy="true" data-testid="index-skeleton">
+        <header class="playground-skeleton__bar">
+          <span class="playground-skeleton__block playground-skeleton__block--title"></span>
+        </header>
+
+        <section class="playground-skeleton__summary">
+          <span class="playground-skeleton__block playground-skeleton__block--headline"></span>
+          <span class="playground-skeleton__line"></span>
+          <span class="playground-skeleton__line"></span>
+        </section>
+
+        <section class="playground-skeleton__summary">
+          <span class="playground-skeleton__block playground-skeleton__block--headline"></span>
+          <span class="playground-skeleton__line"></span>
+        </section>
+
+        <section class="playground-skeleton__card">
+          <span class="playground-skeleton__block playground-skeleton__block--title"></span>
+          <span class="playground-skeleton__block playground-skeleton__block--value"></span>
+        </section>
+
+        <section class="playground-skeleton__card">
+          <span class="playground-skeleton__block playground-skeleton__block--title"></span>
+          <span class="playground-skeleton__block playground-skeleton__block--value"></span>
+        </section>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

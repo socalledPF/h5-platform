@@ -1,0 +1,21 @@
+/**
+ * 安全区：统一用 CSS env()，业务不再自己写。
+ *
+ * iOS / 支持 env() 的 Android 由 env() 给出真实值；
+ * 不支持的 Android 机型拿到的仍是 0px，由 @h5/ui、@h5/hooks 用
+ * app.getInfo().statusBarHeight（@h5/core/env）在 JS 侧兜底写回 --safe-top。
+ */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* 底部固定按钮 / Tabbar 必备：把内容垫到 home indicator 之上 */
+.safe-bottom {
+  padding-bottom: var(--safe-bottom);
+}
+
+/* 沉浸式页面自绘头部时使用 */
+.safe-top {
+  padding-top: var(--safe-top);
+}

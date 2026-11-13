@@ -7,10 +7,151 @@
       content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
     />
     <meta name="format-detection" content="telephone=no" />
-    <title>活动页</title>
+    <title>活动详情</title>
+
+    <!-- 资源预热（设计文档 10.2）：域名随部署环境注入，未定之前保留注释 -->
+    <!-- <link rel="preconnect" href="https://cdn.example.com" crossorigin /> -->
+
+    <style>
+      /*
+        首屏骨架屏（设计文档 10.2）：内联在 HTML 里，HTML 一到就渲染，不依赖 JS/CSS 下载与 Vue 挂载。
+        结构按本页布局摆位（头部栏 → 主视觉 + 倒计时 → 规则卡 → 底部固定 CTA），避免挂载时布局跳变。
+        颜色写成「变量 + 兜底值」，@h5/styles 加载前后视觉一致；app.mount('#app') 会清空容器，骨架随之消失。
+      */
+      .activity-skeleton {
+        box-sizing: border-box;
+        min-height: 100vh;
+        background-color: var(--color-bg-page, #f7f8fa);
+      }
+
+      .activity-skeleton__block {
+        display: block;
+        border-radius: 2px;
+        background-color: var(--color-border, #ebedf0);
+      }
+
+      .activity-skeleton__bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 44px;
+        padding: 0 12px;
+        background-color: var(--color-primary, #1989fa);
+      }
+
+      .activity-skeleton__block--back {
+        width: 16px;
+        height: 16px;
+        background-color: rgb(255 255 255 / 45%);
+      }
+
+      .activity-skeleton__block--title {
+        width: 96px;
+        height: 14px;
+        background-color: rgb(255 255 255 / 45%);
+      }
+
+      .activity-skeleton__hero {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 24px 16px;
+        background-color: var(--color-primary, #1989fa);
+        border-bottom-right-radius: 8px;
+        border-bottom-left-radius: 8px;
+      }
+
+      .activity-skeleton__block--eyebrow {
+        width: 88px;
+        height: 10px;
+        background-color: rgb(255 255 255 / 40%);
+      }
+
+      .activity-skeleton__block--headline {
+        width: 140px;
+        height: 18px;
+        margin-top: 8px;
+        background-color: rgb(255 255 255 / 55%);
+      }
+
+      .activity-skeleton__countdown {
+        display: flex;
+        gap: 8px;
+        margin-top: 16px;
+      }
+
+      .activity-skeleton__unit {
+        width: 44px;
+        height: 46px;
+        border-radius: 4px;
+        background-color: rgb(255 255 255 / 25%);
+      }
+
+      .activity-skeleton__card {
+        padding: 16px;
+        margin: 16px 12px 0;
+        background-color: var(--color-bg, #ffffff);
+        border-radius: 8px;
+      }
+
+      .activity-skeleton__line {
+        height: 12px;
+        border-radius: 2px;
+        background-color: var(--color-border, #ebedf0);
+      }
+
+      .activity-skeleton__line + .activity-skeleton__line {
+        margin-top: 12px;
+      }
+
+      .activity-skeleton__cta {
+        position: fixed;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        box-sizing: border-box;
+        padding: 12px 16px;
+        background-color: var(--color-bg, #ffffff);
+      }
+
+      .activity-skeleton__button {
+        display: block;
+        height: 44px;
+        border-radius: 22px;
+        background-color: var(--color-border, #ebedf0);
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="activity-skeleton" aria-busy="true" data-testid="index-skeleton">
+        <header class="activity-skeleton__bar">
+          <span class="activity-skeleton__block activity-skeleton__block--back"></span>
+          <span class="activity-skeleton__block activity-skeleton__block--title"></span>
+        </header>
+
+        <section class="activity-skeleton__hero">
+          <span class="activity-skeleton__block activity-skeleton__block--eyebrow"></span>
+          <span class="activity-skeleton__block activity-skeleton__block--headline"></span>
+          <div class="activity-skeleton__countdown">
+            <span class="activity-skeleton__unit"></span>
+            <span class="activity-skeleton__unit"></span>
+            <span class="activity-skeleton__unit"></span>
+            <span class="activity-skeleton__unit"></span>
+          </div>
+        </section>
+
+        <section class="activity-skeleton__card">
+          <span class="activity-skeleton__line"></span>
+          <span class="activity-skeleton__line"></span>
+          <span class="activity-skeleton__line"></span>
+        </section>
+
+        <footer class="activity-skeleton__cta">
+          <span class="activity-skeleton__button"></span>
+        </footer>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -8,9 +8,65 @@
     />
     <meta name="format-detection" content="telephone=no" />
     <title>会员中心</title>
+
+    <!--
+      资源预热（设计文档 10.2）：CDN / API 域名由部署环境决定，构建时由 scripts/deploy.ts 替换为实际域名。
+      域名未定前保持注释，避免写死一个并不存在的 preconnect 反而增加一次无效握手。
+      <link rel="preconnect" href="https://cdn.example.com" crossorigin />
+      <link rel="preconnect" href="https://api.example.com" crossorigin />
+    -->
+
+    <style>
+      /*
+        首屏骨架屏（设计文档 10.2）：内联在 HTML 里，HTML 一到达就渲染，不依赖 JS/CSS 下载与 Vue 挂载。
+        颜色写成「变量 + 兜底值」，这样 @h5/styles 加载前后都是同一套视觉。
+        Vue 挂载时 app.mount('#app') 会清空容器内容，骨架屏随之消失，无需额外的移除脚本。
+      */
+      .app-skeleton {
+        display: flex;
+        gap: 12px;
+        padding: 16px;
+        background-color: var(--color-bg-page, #f7f8fa);
+      }
+
+      .app-skeleton__avatar {
+        flex: 0 0 auto;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        background-color: var(--color-border, #ebedf0);
+      }
+
+      .app-skeleton__lines {
+        display: flex;
+        flex: 1 1 auto;
+        flex-direction: column;
+        gap: 12px;
+        padding-top: 4px;
+      }
+
+      .app-skeleton__row {
+        height: 12px;
+        border-radius: 2px;
+        background-color: var(--color-border, #ebedf0);
+      }
+
+      .app-skeleton__row--last {
+        width: 60%;
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <div class="app-skeleton" aria-busy="true" data-testid="index-skeleton">
+        <div class="app-skeleton__avatar"></div>
+        <div class="app-skeleton__lines">
+          <div class="app-skeleton__row"></div>
+          <div class="app-skeleton__row"></div>
+          <div class="app-skeleton__row app-skeleton__row--last"></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
