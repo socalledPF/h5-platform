@@ -17,7 +17,6 @@
     "src"
   ],
   "scripts": {
-    "build": "echo '@h5/styles: css-only package'",
     "typecheck": "echo '@h5/styles: css-only package'",
     "test": "vitest run --passWithNoTests",
     "clean": "rm -rf dist coverage .turbo"

@@ -5,15 +5,15 @@
   "globalDependencies": ["tsconfig.base.json", "packages/config/**"],
   "tasks": {
     "build": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^typecheck"],
       "outputs": ["dist/**"]
     },
     "typecheck": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^typecheck"],
       "outputs": []
     },
     "test": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^typecheck"],
       "outputs": []
     },
     "lint": {

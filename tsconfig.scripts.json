@@ -1,0 +1,8 @@
+{
+  "//": "node 侧脚本（scripts/**）与 playwright 配置的类型检查。playwright.config.ts 保证在 scripts/ 尚未落地时 include 非空。",
+  "extends": "@h5/config/tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node"]
+  },
+  "include": ["scripts/**/*.ts", "playwright.config.ts"]
+}

@@ -11,5 +11,11 @@
     "property-no-unknown": true,
     "selector-pseudo-element-no-unknown": true,
     "unit-no-unknown": true
-  }
+  },
+  "overrides": [
+    {
+      "files": ["**/*.vue"],
+      "customSyntax": "postcss-html"
+    }
+  ]
 }

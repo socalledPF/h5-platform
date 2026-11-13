@@ -1,4 +1,8 @@
 {
-  "extends": "@h5/config/tsconfig.base.json",
-  "include": ["src/**/*.ts"]
+  "//": "包内不依赖 vite，故不继承 vite/client 全局类型；@h5/* 路径来自 base。ui 会产出 .vue，用 vue-tsc 做类型检查。",
+  "extends": "@h5/config/tsconfig.vue.json",
+  "compilerOptions": {
+    "types": []
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "src/**/*.vue"]
 }
