@@ -11,5 +11,8 @@ coverage/
 components.d.ts
 .husky/_
 .idea/
+# VitePress 文档站产物与缓存（dist 已被上面的 `dist/` 覆盖，这里写全便于阅读）
+docs/.vitepress/dist/
+docs/.vitepress/cache/
 .vscode/*
 !.vscode/extensions.json

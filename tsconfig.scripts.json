@@ -4,5 +4,5 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["scripts/**/*.ts", "playwright.config.ts"]
+  "include": ["scripts/**/*.ts", "playwright.config.ts", "docs/.vitepress/config.mts"]
 }

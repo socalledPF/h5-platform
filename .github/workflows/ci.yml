@@ -57,3 +57,7 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+      # 文档站构建也会做死链检查，链接写错即失败。
+      - name: Docs build
+        run: pnpm docs:build

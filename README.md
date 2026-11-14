@@ -39,12 +39,12 @@ h5-monorepo/
 │   ├── create-app.ts            # 脚手架：pnpm create:app <name>
 │   └── deploy.ts                # 发布：pnpm deploy --app <name>
 ├── tests/                       # 仓库级单测（tests/**/*.test.ts，jsdom 环境）
-├── docs/                        # 协议与手册（见下方文档索引）
+├── docs/                        # 文档站（VitePress）：协议与手册，见下方文档索引
 ├── turbo.json                   # 任务编排与缓存
 ├── tsconfig.base.json           # 根 tsconfig（共享包路径别名）
 ├── tsconfig.scripts.json        # 只覆盖 scripts/** 和 playwright.config.ts
 ├── pnpm-workspace.yaml          # workspace 范围：apps/* 与 packages/*
-└── .github/workflows/ci.yml     # CI：typecheck → lint → lint:style → test → build
+└── .github/workflows/ci.yml     # CI：typecheck → lint → lint:style → test → build → docs:build
 ```
 
 ## 快速开始
@@ -82,6 +82,9 @@ pnpm --filter @h5/app-member dev
 | `pnpm clean`             | `rm -rf node_modules coverage .turbo apps/*/dist …`     | 清理依赖与产物（不删源码）                                              |
 | `pnpm create:app <name>` | `node --experimental-strip-types scripts/create-app.ts` | 新建业务应用（见下节）                                                  |
 | `pnpm deploy`            | `node --experimental-strip-types scripts/deploy.ts`     | 发布到 CDN（默认 dry-run，见 [docs/deployment.md](docs/deployment.md)） |
+| `pnpm docs:dev`          | `vitepress dev docs`                                    | 本地预览文档站，`docs/` 就是站点根目录                                  |
+| `pnpm docs:build`        | `vitepress build docs`                                  | 构建静态文档站到 `docs/.vitepress/dist`（含死链检查）                   |
+| `pnpm docs:preview`      | `vitepress preview docs`                                | 本地预览 `docs:build` 的产物                                            |
 | `pnpm prepare`           | `husky`                                                 | 安装 git hooks（`prepare` 后自动执行）                                  |
 
 ## 新建业务
@@ -124,18 +127,19 @@ pnpm create:app order --dry-run  # 只看文件计划与文案替换，不写文
 本地与 CI 必须全绿：
 
 ```bash
-pnpm typecheck && pnpm lint && pnpm lint:style && pnpm test && pnpm build
+pnpm typecheck && pnpm lint && pnpm lint:style && pnpm test && pnpm build && pnpm docs:build
 ```
 
-CI 在 `.github/workflows/ci.yml`，顺序为 Install（`--frozen-lockfile`）→ Typecheck → Lint → Lint styles → Test → Build。PR 还要求：共享包单测覆盖率 ≥ 80%、修改 `packages/*` 需平台负责人审批（见 [docs/development.md](docs/development.md)）。
+CI 在 `.github/workflows/ci.yml`，顺序为 Install（`--frozen-lockfile`）→ Typecheck → Lint → Lint styles → Test → Build → Docs build。PR 还要求：共享包单测覆盖率 ≥ 80%、修改 `packages/*` 需平台负责人审批（见 [docs/development.md](docs/development.md)）。
 
 ## 文档索引
 
-| 文档                                               | 内容                                                                 |
-| -------------------------------------------------- | -------------------------------------------------------------------- |
-| [docs/bridge-protocol.md](docs/bridge-protocol.md) | JSBridge 协议：方法、参数、错误码、最低 App 版本、双端负责人         |
-| [docs/development.md](docs/development.md)         | 本地开发与真机联调、代码规范、提交规范、与客户端/后端的协作流程      |
-| [docs/deployment.md](docs/deployment.md)           | URL 与目录规划、缓存头、灰度与回滚、共享包发布约束、`deploy.ts` 用法 |
+| 文档                                               | 内容                                                                       |
+| -------------------------------------------------- | -------------------------------------------------------------------------- |
+| [docs/bridge-protocol.md](docs/bridge-protocol.md) | JSBridge 协议：方法、参数、错误码、最低 App 版本、双端负责人               |
+| [docs/development.md](docs/development.md)         | 本地开发与真机联调、代码规范、提交规范、与客户端/后端的协作流程            |
+| [docs/deployment.md](docs/deployment.md)           | URL 与目录规划、缓存头、灰度与回滚、共享包发布约束、`deploy.ts` 用法       |
+| [docs/index.md](docs/index.md)                     | 文档站首页：定位、四条硬约束、工程结构、常用命令。`pnpm docs:dev` 本地预览 |
 
 ## 常见问题
 

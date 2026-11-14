@@ -7,6 +7,8 @@ export default [
       '**/dist/**',
       '**/coverage/**',
       '**/.turbo/**',
+      'docs/.vitepress/dist/**',
+      'docs/.vitepress/cache/**',
       '**/components.d.ts',
       'pnpm-lock.yaml',
     ],
