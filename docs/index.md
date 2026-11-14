@@ -36,7 +36,7 @@ features:
 ## 工程结构
 
 ```text
-h5-monorepo/
+h5-platform/
 ├── apps/                  # 每个业务一个应用 = 一个独立入口 URL
 │   ├── member/            # 会员中心，也是 pnpm create:app 的默认骨架
 │   ├── activity/          # 活动页
