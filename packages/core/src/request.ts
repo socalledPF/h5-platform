@@ -23,6 +23,13 @@ declare module 'axios' {
     errorMode?: ErrorMode
     /** 网络错误的重试次数，默认 1（仅对幂等方法生效）。 */
     retry?: number
+    /**
+     * 声明本次请求就是首屏数据请求，返回后才记录「首屏接口」耗时（设计文档 10.1）。
+     *
+     * 默认 false：能力预热、埋点上报等后台请求同样会有响应，
+     * 但它们不是首屏数据，不能抢占首屏接口打点。首屏页面显式传 `firstScreen: true`。
+     */
+    firstScreen?: boolean
     /** 是否已因 401 重放过，防止无限循环。 */
     _retried?: boolean
     /** 已重试次数。 */
@@ -34,6 +41,8 @@ declare module 'axios' {
 export interface RequestConfig extends AxiosRequestConfig {
   errorMode?: ErrorMode
   retry?: number
+  /** 首屏数据请求标记，见 `AxiosRequestConfig.firstScreen`。 */
+  firstScreen?: boolean
 }
 
 /** 默认超时 15 秒（设计文档 6.3）。 */
@@ -105,7 +114,9 @@ function shouldRetry(
 
 /** 解包 `{ code, data, msg }`：code !== 0 抛 ApiError，非信封结构原样返回。 */
 function unwrap(response: AxiosResponse): unknown {
-  markFirstScreenApi()
+  // 只有业务显式声明 firstScreen 的请求才计入首屏接口耗时（设计文档 10.1）：
+  // 谁先返回谁就被记成首屏接口会把能力预热、埋点上报误记成首屏数据。
+  if (response.config.firstScreen === true) markFirstScreenApi()
   const payload = response.data
   if (!isEnvelope(payload)) return payload
   if (payload.code === 0) return payload.data
@@ -124,9 +135,18 @@ function isEnvelope(value: unknown): value is Envelope {
 /** 按 errorMode 决定是否提示用户，并把任意异常收敛成 ApiError。 */
 function notifyAndWrap(error: unknown, config: AxiosRequestConfig | undefined): ApiError {
   const apiError = normalizeError(error)
+  // 取消是调用方自己的行为（页面卸载时 withCancel 的 abort），不是需要提示用户的错误：
+  // 仍以 ApiError 拒绝，让调用方观察到取消，但绝不进入 notifier（设计文档 6.3）。
+  // 收敛点在这里而不是某个分支，401 刷新失败、重试等路径上的取消也一并覆盖。
+  if (isCanceled(error)) return apiError
   const mode = config?.errorMode ?? 'toast'
   if (mode === 'toast') notifyUser(apiError.message)
   return apiError
+}
+
+/** 与 shouldRetry 的取消判定保持一致：axios 主动中止的请求没有用户可读的错误。 */
+function isCanceled(error: unknown): boolean {
+  return isAxiosError(error) && error.code === 'ERR_CANCELED'
 }
 
 function notifyUser(message: string): void {

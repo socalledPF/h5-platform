@@ -2,8 +2,9 @@
  * 安全区：统一用 CSS env()，业务不再自己写。
  *
  * iOS / 支持 env() 的 Android 由 env() 给出真实值；
- * 不支持的 Android 机型拿到的仍是 0px，由 @h5/ui、@h5/hooks 用
- * app.getInfo().statusBarHeight（@h5/core/env）在 JS 侧兜底写回 --safe-top。
+ * 不支持的 Android 机型拿到的仍是 0px，由 @h5/core 在 initEnv 之后用
+ * app.getInfo() 的 statusBarHeight / safeAreaTop 兜底写回 --safe-top、--safe-bottom。
+ * 注意：这只是 H5 侧兜底，App 端是否也设置这两个内边距仍待与客户端确认（跨端契约待确认）。
  */
 :root {
   --safe-top: env(safe-area-inset-top, 0px);

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { goBack, navigate } from '@h5/core'
 import { useNavMode } from '@h5/hooks'
-import { AppPage } from '@h5/ui'
+import { AppNavBar, AppPage } from '@h5/ui'
 import { showToast } from 'vant'
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
@@ -48,9 +48,12 @@ function join(): void {
 </script>
 
 <template>
-  <AppPage nav-mode="none" :padded="false">
+  <AppPage :nav-mode="mode" :padded="mode !== 'none'">
+    <!-- 非沉浸式（?nav=native / ?nav=h5）交给统一的导航栏，页面不再自绘头部 -->
+    <AppNavBar v-if="mode !== 'none'" :mode="mode" :title="query.title" />
+
     <!-- 沉浸式页面自绘头部：自己吃状态栏安全区（设计文档 7.1 / 8.2） -->
-    <header class="activity__bar" data-testid="activity-header">
+    <header v-if="mode === 'none'" class="activity__bar" data-testid="activity-header">
       <button class="activity__back" type="button" aria-label="返回" @click="back">
         <span class="activity__back-icon" aria-hidden="true" />
       </button>

@@ -3,6 +3,7 @@ import type { AxiosAdapter, AxiosResponse, InternalAxiosRequestConfig } from 'ax
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAuthStore } from '../src/auth'
 import { ApiError, normalizeError } from '../src/errors'
+import { firstScreenStages, resetMonitorState } from '../src/monitor'
 import { get, post, request, resetRequestState, setErrorNotifier, withCancel } from '../src/request'
 
 const bridgeMocks = vi.hoisted(() => ({
@@ -54,6 +55,7 @@ function networkError(config: InternalAxiosRequestConfig): never {
 
 beforeEach(() => {
   resetRequestState()
+  resetMonitorState()
   useAuthStore().clear()
   bridgeMocks.refreshToken.mockReset()
   bridgeMocks.login.mockReset()
@@ -259,6 +261,41 @@ describe('withCancel（设计文档 6.3）', () => {
     abort()
 
     await expect(promise).rejects.toMatchObject({ name: 'ApiError', message: '请求已取消' })
+  })
+
+  it('abort 后不弹错误提示：取消不是需要提示用户的错误', async () => {
+    // 真实 notifier（spy）：no-op notifier 会让「取消也走 toast」的缺陷静默通过
+    const notifier = vi.fn()
+    setErrorNotifier(notifier)
+    const adapter: AxiosAdapter = () => new Promise<AxiosResponse>(() => undefined)
+
+    const { promise, abort } = withCancel((signal) =>
+      request({ url: '/api/slow', adapter, signal }),
+    )
+    abort()
+
+    await expect(promise).rejects.toMatchObject({ name: 'ApiError', message: '请求已取消' })
+    expect(notifier).not.toHaveBeenCalled()
+  })
+})
+
+describe('首屏接口打点（设计文档 10.1）', () => {
+  const stages = (): string[] => firstScreenStages().map(([stage]) => stage)
+
+  it('后台请求（能力预热、埋点上报）不记为首屏接口', async () => {
+    const { adapter } = createAdapter(() => ({ status: 200, data: { code: 0, data: 1 } }))
+
+    await request({ url: '/api/capabilities', adapter })
+
+    expect(stages()).not.toContain('first-screen-api')
+  })
+
+  it('显式声明 firstScreen 的请求才记录首屏接口', async () => {
+    const { adapter } = createAdapter(() => ({ status: 200, data: { code: 0, data: 1 } }))
+
+    await request({ url: '/api/home', adapter, firstScreen: true })
+
+    expect(stages()).toContain('first-screen-api')
   })
 })
 

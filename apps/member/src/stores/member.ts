@@ -36,7 +36,8 @@ export const useMemberStore = defineStore('member', () => {
    */
   async function refreshOrderCount(): Promise<number> {
     try {
-      const result = await listOrders({ page: 1, size: 1 })
+      // 会员中心首屏渲染的就是这个总数：显式声明 firstScreen，core 才会计入首屏接口阶段
+      const result = await listOrders({ page: 1, size: 1 }, { firstScreen: true })
       if (Number.isFinite(result.total)) {
         orderCount.value = result.total
         orderCountLoaded.value = true

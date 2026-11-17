@@ -2,14 +2,23 @@
 /**
  * create-app —— 一键新建业务应用（设计方案 §4「新增业务流程」）。
  *
- *   pnpm create:app <name> [--from <app>] [--dry-run] [--force] [--help]
+ *   pnpm create:app <name> [--from <app>] [--dry-run] [--force --overwrite] [--help]
  *
  * 设计约束：
  * - 只用 Node 内置模块，零依赖；Node 24 直接执行 TypeScript（type stripping）。
- * - 先把整个写入计划在内存里算完并打印，再落盘；落盘失败会回滚，不留半个应用。
+ * - 先把整个写入计划在内存里算完并打印，再落盘；落盘失败只回滚本次写出的文件，
+ *   绝不删除运行前就已存在的 apps/<name>（--force --overwrite 场景）。
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  rmdirSync,
+  writeFileSync,
+} from 'node:fs'
 import { dirname, extname, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -22,6 +31,8 @@ const NAME_PATTERN = /^[a-z][a-z0-9-]{1,30}$/
 const DEFAULT_FROM = 'member'
 const EXCLUDED_DIRS = new Set(['node_modules', 'dist', 'coverage', '.turbo'])
 const EXCLUDED_SUFFIXES = ['.tsbuildinfo']
+/** 覆盖写入时最多列出多少个「将被覆盖」的文件，避免刷屏。 */
+const OVERWRITE_LIST_LIMIT = 10
 const TEXT_EXTENSIONS = new Set([
   '.ts',
   '.tsx',
@@ -56,6 +67,7 @@ const HELP = `create-app · 新建业务应用（设计方案 §4）
   --from <app>        骨架来源应用，默认 ${DEFAULT_FROM}
   --dry-run           只打印文件计划与文案替换，不写任何文件
   --force             目标已存在时仍然写入（覆盖同名文件，不删除多余文件）
+  --overwrite         与 --force 联用，明确确认覆盖已存在的 apps/<name>；缺省会被拒绝
   --help, -h          显示本帮助
 
 做什么
@@ -63,13 +75,19 @@ const HELP = `create-app · 新建业务应用（设计方案 §4）
   2. 改写包名 @h5/app-<from> → @h5/app-<name>、vite appId、index.html 的 <title>
   3. 打印后续需要人工完成的 5 步（路由 / base 路径 / 客户端入口 URL / 依赖边界 / pnpm install）
 
+覆盖已存在的应用
+  apps/<name> 已存在时，必须同时给 --force --overwrite：先列出将被覆盖的文件，
+  再写入同名文件（不删除多余文件）。写入中途失败只回滚本次写出的文件，
+  已存在的目录与其中其他文件一律保留。
+
 退出码
   0 成功（含 --dry-run）  1 校验或使用错误  2 意外失败
 
 示例
   pnpm create:app order
   pnpm create:app order --dry-run
-  pnpm create:app order --from activity --force
+  pnpm create:app order --from activity
+  pnpm create:app order --force --overwrite
 `
 
 const COLOR_ENABLED = process.stdout.isTTY === true && process.env.NO_COLOR === undefined
@@ -101,6 +119,7 @@ type Options = {
   from: string
   dryRun: boolean
   force: boolean
+  overwrite: boolean
   help: boolean
   errors: string[]
 }
@@ -155,6 +174,7 @@ function parseArgs(argv: string[]): Options {
     from: DEFAULT_FROM,
     dryRun: false,
     force: false,
+    overwrite: false,
     help: false,
     errors: [],
   }
@@ -173,6 +193,10 @@ function parseArgs(argv: string[]): Options {
     }
     if (token === '--force') {
       options.force = true
+      continue
+    }
+    if (token === '--overwrite') {
+      options.overwrite = true
       continue
     }
     if (token === '--from' || token.startsWith('--from=')) {
@@ -319,6 +343,7 @@ function validate(options: Options): {
   from: string
   fromDir: string
   targetDir: string
+  preExisted: boolean
 } {
   if (options.errors.length > 0) {
     throw new CliError(`${options.errors.join('\n')}\n\n用 pnpm create:app --help 查看用法。`)
@@ -349,9 +374,16 @@ function validate(options: Options): {
   }
 
   const targetDir = join(APPS_DIR, name)
-  if (existsSync(targetDir) && !options.force) {
+  const preExisted = existsSync(targetDir)
+  if (preExisted && !options.force) {
     throw new CliError(
-      `目标 apps/${name} 已存在。换一个名字，或加 --force 覆盖同名文件（不会删除多余文件）。`,
+      `目标 apps/${name} 已存在。换一个名字，或加 --force --overwrite 覆盖同名文件（不会删除多余文件）。`,
+    )
+  }
+  if (preExisted && !options.overwrite) {
+    throw new CliError(
+      `目标 apps/${name} 已存在，--force 会覆盖其中同名文件（不会删除多余文件）。\n` +
+        `确认要写入已存在的 apps/${name} 请再加 --overwrite，避免误覆盖自己的工作。`,
     )
   }
 
@@ -364,7 +396,7 @@ function validate(options: Options): {
     throw new CliError(`名字 "${name}" 已被 packages/${name} 占用，换一个应用名。`)
   }
 
-  return { name, from: options.from, fromDir, targetDir }
+  return { name, from: options.from, fromDir, targetDir, preExisted }
 }
 
 function buildPlan(
@@ -435,7 +467,8 @@ function printPlan(options: {
   hits: RuleHit[]
   leftovers: LeftoverHit[]
   dryRun: boolean
-  force: boolean
+  preExisted: boolean
+  overwrites: string[]
 }): void {
   const { plan, hits, leftovers } = options
   const totalSize = plan.reduce((total, file) => total + file.size, 0)
@@ -446,8 +479,23 @@ function printPlan(options: {
   console.log(`  写入目录：${relative(WORKSPACE_ROOT, options.targetDir) || '.'}`)
   console.log(`  排除规则：${[...EXCLUDED_DIRS].join(' / ')} / ${EXCLUDED_SUFFIXES.join(' / ')}`)
   if (options.dryRun) console.log(`  模式：${yellow('--dry-run（不写文件）')}`)
-  if (options.force && existsSync(options.targetDir)) {
-    console.log(`  已存在的问题：${yellow('目标已存在，--force 覆盖同名文件')}`)
+
+  if (options.preExisted) {
+    console.log(
+      `\n${bold(yellow(`⚠ 目标 apps/${options.name} 已存在，本次是覆盖写入`))}` +
+        `${dim('（只覆盖同名文件，不删除多余文件；失败只回滚本次写入）')}`,
+    )
+    if (options.overwrites.length === 0) {
+      console.log(`  ${dim('计划中的文件都还不存在，不会覆盖任何已有文件。')}`)
+    } else {
+      console.log(`  ${yellow('将被覆盖')} ${options.overwrites.length} 个已存在的文件：`)
+      for (const file of options.overwrites.slice(0, OVERWRITE_LIST_LIMIT)) {
+        console.log(`    ${yellow('!')} ${file}`)
+      }
+      if (options.overwrites.length > OVERWRITE_LIST_LIMIT) {
+        console.log(`    ${dim(`… 其余 ${options.overwrites.length - OVERWRITE_LIST_LIMIT} 个`)}`)
+      }
+    }
   }
 
   console.log(`\n${bold(`计划写入 ${plan.length} 个文件（${formatSize(totalSize)}）`)}`)
@@ -489,10 +537,78 @@ function printNextSteps(name: string): void {
   console.log('  5. 执行 pnpm install 链接新 workspace 包，然后 pnpm dev 打开浏览器 mock 模式。')
 }
 
-function writePlan(plan: PlannedFile[], targetDir: string): void {
+/** 创建 dir 及其缺失的父目录，只记录本次真正新建的目录，供回滚使用。 */
+function ensureDirectory(dir: string, createdDirs: string[]): void {
+  if (existsSync(dir)) return
+  const parent = dirname(dir)
+  if (parent !== dir) ensureDirectory(parent, createdDirs)
+  mkdirSync(dir)
+  createdDirs.push(dir)
+}
+
+type WriteJournal = {
+  /** 本次尝试写出的文件，按顺序记录；回滚时逆序处理。 */
+  writtenFiles: string[]
+  /** 本次新建的目录，按创建顺序记录；回滚时逆序删除。 */
+  createdDirs: string[]
+  /** 覆盖前已存在文件的原内容，回滚时还原。 */
+  overwritten: Map<string, Buffer>
+}
+
+function rollbackWrite(journal: WriteJournal, targetDir: string, preExisted: boolean): string {
+  let restored = 0
+  let removed = 0
+  let cleanedDirs = 0
+
+  for (let index = journal.writtenFiles.length - 1; index >= 0; index -= 1) {
+    const filePath = journal.writtenFiles[index]
+    const original = journal.overwritten.get(filePath)
+    try {
+      if (original === undefined) {
+        rmSync(filePath, { force: true })
+        removed += 1
+      } else {
+        writeFileSync(filePath, original)
+        restored += 1
+      }
+    } catch {
+      // 回滚尽力而为：单个文件失败不影响其余文件与目录处理。
+    }
+  }
+
+  for (let index = journal.createdDirs.length - 1; index >= 0; index -= 1) {
+    const dirPath = journal.createdDirs[index]
+    // 运行前就存在的目标目录（及其父目录）永远不进 createdDirs；这里再兜一层。
+    if (preExisted && dirPath === targetDir) continue
+    try {
+      rmdirSync(dirPath)
+      cleanedDirs += 1
+    } catch {
+      // 目录非空或已被占用：保留，绝不 rmSync 整棵树。
+    }
+  }
+
+  const parts = [`删除本次新建文件 ${removed} 个`, `还原被覆盖文件 ${restored} 个`]
+  if (cleanedDirs > 0) parts.push(`清理本次新建目录 ${cleanedDirs} 个`)
+  return parts.join('，')
+}
+
+function writePlan(options: {
+  plan: PlannedFile[]
+  targetDir: string
+  name: string
+  preExisted: boolean
+}): void {
+  const { plan, targetDir, name, preExisted } = options
+  const journal: WriteJournal = { writtenFiles: [], createdDirs: [], overwritten: new Map() }
+
   try {
     for (const file of plan) {
-      mkdirSync(dirname(file.targetPath), { recursive: true })
+      ensureDirectory(dirname(file.targetPath), journal.createdDirs)
+      if (existsSync(file.targetPath)) {
+        journal.overwritten.set(file.targetPath, readFileSync(file.targetPath))
+      }
+      journal.writtenFiles.push(file.targetPath)
       if (typeof file.content === 'string') {
         writeFileSync(file.targetPath, file.content, 'utf8')
       } else {
@@ -500,9 +616,13 @@ function writePlan(plan: PlannedFile[], targetDir: string): void {
       }
     }
   } catch (error) {
-    rmSync(targetDir, { recursive: true, force: true })
+    const outcome = rollbackWrite(journal, targetDir, preExisted)
     const reason = error instanceof Error ? error.message : String(error)
-    throw new CliError(`写入 apps 失败，已回滚目标目录：${reason}`, 2)
+    const safety = preExisted
+      ? `原有的 apps/${name} 目录未被删除：只回滚了本次写入（${outcome}），` +
+        '其中不相关的已存在文件保持原样。'
+      : `已回滚（${outcome}），未留下半个应用。`
+    throw new CliError(`写入 apps/${name} 失败。${safety}\n原因：${reason}`, 2)
   }
 }
 
@@ -513,7 +633,7 @@ function main(argv: string[]): number {
     return 0
   }
 
-  const { name, from, fromDir, targetDir } = validate(options)
+  const { name, from, fromDir, targetDir, preExisted } = validate(options)
   const context: RuleContext = { from, name }
   const { files: plan, hits } = buildPlan(fromDir, targetDir, context)
   const leftovers = collectLeftovers(plan, from)
@@ -521,6 +641,10 @@ function main(argv: string[]): number {
   if (plan.length === 0) {
     throw new CliError(`apps/${from} 中没有任何可复制的文件，骨架为空。`)
   }
+
+  const overwrites = preExisted
+    ? plan.filter((file) => existsSync(file.targetPath)).map((file) => file.relativePath)
+    : []
 
   printPlan({
     name,
@@ -530,7 +654,8 @@ function main(argv: string[]): number {
     hits,
     leftovers,
     dryRun: options.dryRun,
-    force: options.force,
+    preExisted,
+    overwrites,
   })
 
   if (options.dryRun) {
@@ -539,8 +664,14 @@ function main(argv: string[]): number {
     return 0
   }
 
-  writePlan(plan, targetDir)
-  console.log(`\n${green(`✔ 已创建 apps/${name}/（${plan.length} 个文件）`)}`)
+  writePlan({ plan, targetDir, name, preExisted })
+  console.log(
+    `\n${green(
+      preExisted
+        ? `✔ 已写入 apps/${name}/（${plan.length} 个文件，覆盖 ${overwrites.length} 个已存在文件）`
+        : `✔ 已创建 apps/${name}/（${plan.length} 个文件）`,
+    )}`,
+  )
   printNextSteps(name)
   return 0
 }

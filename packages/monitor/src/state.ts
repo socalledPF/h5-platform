@@ -161,13 +161,17 @@ export function errorMessage(error: unknown): string {
   }
 }
 
+/**
+ * H5 版本取构建期注入的 `__APP_VERSION__`（vite define，见 core/env.ts）；
+ * 单测 / 未走 vite 的场景没有该常量，按 '0.0.0' 降级而不是抛错。
+ */
 function readH5Version(): string {
   try {
-    const meta = import.meta as unknown as { env?: Record<string, string | undefined> }
-    return meta.env?.VITE_APP_VERSION ?? '0.0.0'
+    if (typeof __APP_VERSION__ === 'string' && __APP_VERSION__ !== '') return __APP_VERSION__
   } catch {
-    return '0.0.0'
+    // 未注入时读取裸标识符可能抛错，按降级处理
   }
+  return '0.0.0'
 }
 
 /** 当前路由：监控提交时以真实地址为准，避免依赖 core 的 router 实例。 */

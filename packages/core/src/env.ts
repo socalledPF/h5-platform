@@ -66,7 +66,30 @@ export async function initEnv(overrides: Partial<AppEnv> = {}): Promise<AppEnv> 
   } satisfies Partial<AppEnv>)
 
   if (env.isApp) await applyNativeAppInfo()
+  applySafeAreaVariables()
   return env
+}
+
+/**
+ * Android 安全区兜底（设计文档 8.2）：部分 Android 机型 `env(safe-area-inset-top)` 恒为 0，
+ * 自绘头部的页面（如 activity）会顶到状态栏下面，因此用原生量测值把 CSS 变量写到 `:root`。
+ *
+ * 这是 **H5 侧兜底**；App 端是否也会设置这两个内边距尚未与客户端确认（跨端契约待确认），
+ * 若两端都写，最终取值与是否叠加以客户端结论为准。
+ *
+ * 只在量测值 > 0 时写：浏览器里全为 0，写 0px 反而会盖掉 CSS 里的 `env()` 兜底。
+ */
+function applySafeAreaVariables(): void {
+  try {
+    if (typeof document === 'undefined') return
+    const root = document.documentElement
+    const top = env.safeAreaTop > 0 ? env.safeAreaTop : env.statusBarHeight
+    const bottom = env.safeAreaBottom
+    if (top > 0) root.style.setProperty('--safe-top', `${top}px`)
+    if (bottom > 0) root.style.setProperty('--safe-bottom', `${bottom}px`)
+  } catch {
+    // 拿不到 DOM（SSR / 单测环境异常）时保持 CSS env() 兜底，不影响启动
+  }
 }
 
 /**

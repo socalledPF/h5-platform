@@ -21,7 +21,7 @@ void createH5App(App, {
   requireLogin: false,
   // 调试页始终用 H5 自绘导航栏：在 App 内也能看到标题与当前环境，便于截图反馈
   defaultNav: 'h5',
-  monitor: toMonitorAdapter(),
+  monitor: toMonitorAdapter({ dsn: import.meta.env.VITE_SENTRY_DSN as string | undefined }),
   mock: {
     toast: (message) => {
       showToast(message)

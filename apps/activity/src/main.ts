@@ -21,7 +21,7 @@ void createH5App(App, {
   requireLogin: false,
   // 沉浸式：默认就没有导航栏，页面自绘头部并处理安全区（设计文档 7.1 / 8.2）
   defaultNav: 'none',
-  monitor: toMonitorAdapter(),
+  monitor: toMonitorAdapter({ dsn: import.meta.env.VITE_SENTRY_DSN as string | undefined }),
   mock: {
     toast: (message) => {
       showToast(message)

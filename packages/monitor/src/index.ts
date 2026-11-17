@@ -12,4 +12,5 @@ export { markFirstScreen, reportPerf } from './perf'
 export { trackEvent, trackPageView } from './track'
 export { startWhiteScreenCheck } from './whitescreen'
 
+export type { MonitorAdapterConfig } from './adapter'
 export type { MonitorOptions } from './state'

@@ -5,6 +5,7 @@
  *   pnpm deploy --app <name> [--version <v>] [--env dev|test|pre|prod] [--execute --yes]
  *
  * 默认 dry-run：只解析 / 校验 / 打印计划，不访问网络、不上传任何文件。
+ * 默认 --env 是 test（不是 prod）：忘记写 --env 不会误发线上，prod 必须显式指定。
  * 真正上传必须同时给出 --execute --yes，并配置 UPLOAD_CMD 模板（见 docs/deployment.md）。
  */
 
@@ -16,8 +17,11 @@ import { fileURLToPath } from 'node:url'
 const WORKSPACE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const APPS_DIR = join(WORKSPACE_ROOT, 'apps')
 const ENVIRONMENTS = ['dev', 'test', 'pre', 'prod'] as const
-const DEFAULT_ENVIRONMENT = 'prod'
+/** 默认发到 test：忘记写 --env 时绝不能落到线上，prod 必须显式指定。 */
+const DEFAULT_ENVIRONMENT = 'test'
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/
+/** 应用名会被拼进 CDN 路径与上传命令字符串，与 create-app 同名规则，挡住 ../ 与 shell 元字符。 */
+const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{1,30}$/
 
 type Environment = (typeof ENVIRONMENTS)[number]
 
@@ -54,7 +58,7 @@ const HELP = `deploy · 按应用发布到 CDN（设计方案 §9）
 参数
   --app <name>        应用目录名，必须存在于 apps/ 下（也可作为第一个位置参数）
   --version <v>       覆盖 package.json 的版本号，格式 x.y.z[-tag]
-  --env <env>         dev | test | pre | prod，默认 ${DEFAULT_ENVIRONMENT}；非 prod 会切换域名并告警
+  --env <env>         dev | test | pre | prod，默认 ${DEFAULT_ENVIRONMENT}；发 prod 必须显式写 --env prod
   --execute           真正执行上传（默认 dry-run，什么都不做）
   --yes               与 --execute 联用，二次确认上传不可撤销
   --help, -h          显示本帮助
@@ -72,12 +76,17 @@ do 什么
   DEPLOY_ENTRY_HOST   覆盖入口域名（默认按 --env 取 xxx.com 占位）
   DEPLOY_CDN_HOST     覆盖 CDN 域名（默认按 --env 取 xxx.com 占位）
 
+默认环境
+  不写 --env 时落到 ${DEFAULT_ENVIRONMENT}（不是 prod）。发 prod 必须显式 --env prod，
+  --execute 前的最后一行会醒目打印解析出的环境与目标目录，便于二次核对。
+
 退出码
   0 成功（含 dry-run）  1 校验或使用错误  2 意外失败（例如上传命令失败）
 
 示例
   pnpm deploy --app member
   pnpm deploy member --env test --version 0.2.0
+  pnpm deploy --app member --env prod --execute --yes
   UPLOAD_CMD="rsync -av {src} {dest}" pnpm deploy --app member --execute --yes
 `
 
@@ -109,6 +118,7 @@ type Options = {
   app: string | null
   version: string | null
   env: string
+  envExplicit: boolean
   execute: boolean
   yes: boolean
   help: boolean
@@ -146,6 +156,7 @@ function parseArgs(argv: string[]): Options {
     app: null,
     version: null,
     env: DEFAULT_ENVIRONMENT,
+    envExplicit: false,
     execute: false,
     yes: false,
     help: false,
@@ -185,7 +196,10 @@ function parseArgs(argv: string[]): Options {
     if (token === '--env' || token.startsWith('--env=')) {
       const parsed = readFlagValue(argv, index, token)
       if (parsed.error !== undefined) options.errors.push(parsed.error)
-      else options.env = parsed.value as string
+      else {
+        options.env = parsed.value as string
+        options.envExplicit = true
+      }
       index = parsed.index
       continue
     }
@@ -354,10 +368,17 @@ function printHeader(context: {
   console.log(`  版本：${context.version}　${dim(context.versionNote)}`)
   console.log(`  commit：${context.hash}`)
   console.log(`  发布标识：${context.release}`)
-  console.log(
-    `  环境：${context.env}（${context.entryHost}）` +
-      `${context.env === 'prod' ? '' : `　${yellow('非 prod：域名已切换，确认不是误发线上')}`}`,
-  )
+  if (context.env === 'prod') {
+    console.log(`  环境：${bold(red('prod（生产）'))}（${context.entryHost}）`)
+    console.log(
+      `  ${bold(red('⚠ 生产环境：发布后立即对外可见，只有显式 --env prod 才会走到这里'))}`,
+    )
+  } else {
+    console.log(`  环境：${bold(context.env)}（${context.entryHost}）`)
+    console.log(
+      `  ${yellow(`非 prod：本次只发到 ${context.env}，没有触及线上；默认环境是 ${DEFAULT_ENVIRONMENT}`)}`,
+    )
+  }
   console.log(`  域名来源：${context.hostSource}`)
   console.log(`  CDN 目录：${context.cdnBase}`)
   console.log(`  入口 HTML：${context.entryIndex}`)
@@ -446,6 +467,11 @@ function main(argv: string[]): number {
   if (!isEnvironment(options.env)) {
     throw new CliError(`--env "${options.env}" 不合法，可选：${ENVIRONMENTS.join(' | ')}。`)
   }
+  if (options.env === 'prod' && !options.envExplicit) {
+    throw new CliError(
+      `发布到 prod 必须显式写 --env prod（默认环境是 ${DEFAULT_ENVIRONMENT}，防止漏写 --env 误发线上）。`,
+    )
+  }
   if (options.execute && !options.yes) {
     throw new CliError('--execute 需要配合 --yes 二次确认（上传到 CDN 不可撤销）。')
   }
@@ -454,6 +480,14 @@ function main(argv: string[]): number {
   }
 
   const app = options.app
+  if (!APP_NAME_PATTERN.test(app)) {
+    throw new CliError(
+      `--app "${app}" 不合法（${APP_NAME_PATTERN.source}）。` +
+        '\n应用名会拼进 CDN 路径与上传命令，只允许小写字母开头、' +
+        '小写字母 / 数字 / 短横线，长度 2-31。' +
+        `\n可用应用：${listApps().join(' / ') || '（apps/ 为空）'}`,
+    )
+  }
   const appDir = join(APPS_DIR, app)
   if (!existsSync(join(appDir, 'package.json'))) {
     throw new CliError(
@@ -508,6 +542,10 @@ function main(argv: string[]): number {
 
   if (!options.execute) {
     console.log(`\n${cyan('dry-run：未上传任何文件、未修改 Nginx。')}`)
+    console.log(
+      `  解析出的环境：${env}${options.envExplicit ? dim('（来自 --env）') : dim(`（默认值，未写 --env）`)}` +
+        `${env === 'prod' ? red(' ← 生产环境') : ''}`,
+    )
     console.log('确认无误后加 --execute --yes 执行第 1 步上传（其余步骤由人工或 CI 完成）。')
     return 0
   }
@@ -523,6 +561,8 @@ function main(argv: string[]): number {
 
   console.log(`\n${bold('执行上传（UPLOAD_CMD）')}`)
   console.log(`  $ ${uploadCommand}`)
+  const banner = `即将上传到【${env.toUpperCase()}】环境${env === 'prod' ? '（生产，对外可见）' : ''}：${cdnBase}`
+  console.log(env === 'prod' ? bold(red(`▶ ${banner}`)) : bold(yellow(`▶ ${banner}`)))
   try {
     execSync(uploadCommand, { cwd: WORKSPACE_ROOT, stdio: 'inherit' })
   } catch (error) {

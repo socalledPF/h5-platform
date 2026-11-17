@@ -104,7 +104,7 @@ pnpm create:app order --dry-run  # 只看文件计划与文案替换，不写文
 4. **依赖边界**：`apps/*` 只能依赖 `packages/*`，禁止 app 之间互相 import（ESLint 已拦截）。
 5. **`pnpm install`**：让 pnpm 链接新的 workspace 包，然后 `pnpm dev` 开发。
 
-其他参数：`--from <app>` 换骨架来源，`--force` 覆盖已存在的目标目录，`--help` 看帮助。
+其他参数：`--from <app>` 换骨架来源；目标目录已存在时必须 `--force --overwrite` 才会覆盖（写入失败只回滚本次写入，绝不删除原有目录），`--help` 看帮助。
 
 ## 发布与回滚
 

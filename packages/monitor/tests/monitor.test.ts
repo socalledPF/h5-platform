@@ -12,7 +12,13 @@ import {
 import { initMonitor, resetMonitorRuntime } from '../src/init'
 import { markFirstScreen, reportPerf, resetPerf } from '../src/perf'
 import { initSentry, isSentryReady, resetSentry, sentryCapture } from '../src/sentry'
-import { collectedRecords, pushRecentError, recentErrorText, resetMonitor } from '../src/state'
+import {
+  collectedRecords,
+  getState,
+  pushRecentError,
+  recentErrorText,
+  resetMonitor,
+} from '../src/state'
 import type { MonitorOptions } from '../src/state'
 import { trackEvent, trackPageView } from '../src/track'
 
@@ -68,6 +74,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
   vi.useRealTimers()
   resetErrorHandlers()
   resetMonitor()
@@ -111,8 +118,31 @@ describe('initMonitor（设计文档 11.2）', () => {
       message: 'boom',
       extra: 1,
     })
-    expect(typeof payload.h5Version).toBe('string')
+    // 未注入 __APP_VERSION__ 时降级，而不是静默上报一个假版本
+    expect(payload.h5Version).toBe('0.0.0')
     expect(typeof payload.network).toBe('string')
+  })
+
+  it('h5Version 取构建期注入的 __APP_VERSION__（设计文档 11.2 / 9.4）', () => {
+    vi.stubGlobal('__APP_VERSION__', '1.4.2')
+    initDefault()
+
+    captureError(new Error('boom'))
+    trackEvent('click')
+    reportPerf('render', 10)
+
+    expect(recordsOf('error')[0].h5Version).toBe('1.4.2')
+    expect(recordsOf('track')[0].h5Version).toBe('1.4.2')
+    expect(recordsOf('perf')[0].h5Version).toBe('1.4.2')
+  })
+
+  it('__APP_VERSION__ 为空串时不被当成有效版本', () => {
+    vi.stubGlobal('__APP_VERSION__', '')
+    initDefault()
+
+    captureError(new Error('boom'))
+
+    expect(recordsOf('error')[0].h5Version).toBe('0.0.0')
   })
 
   it('未登录时 uid 记为 anon', () => {
@@ -138,6 +168,46 @@ describe('initMonitor（设计文档 11.2）', () => {
     adapter.init?.({ appId: 'activity', env: testEnv })
     captureError(new Error('boom'))
     expect(recordsOf('error')[0].appId).toBe('activity')
+  })
+
+  it('toMonitorAdapter({ dsn }) 在 init 时把 dsn 交给 Sentry', async () => {
+    const adapter = toMonitorAdapter({ dsn: 'https://x@y/z' })
+
+    adapter.init?.({ appId: 'member', env: testEnv })
+
+    await vi.waitFor(() => {
+      expect(sentryInit).toHaveBeenCalledTimes(1)
+    })
+    expect(sentryInit).toHaveBeenCalledWith(
+      expect.objectContaining({ dsn: 'https://x@y/z', environment: 'prod' }),
+    )
+    expect(isSentryReady()).toBe(true)
+  })
+
+  it('toMonitorAdapter() 不带参数时行为不变：不加载 Sentry 但仍记录', async () => {
+    const adapter = toMonitorAdapter()
+
+    expect(() => adapter.init?.({ appId: 'member', env: testEnv })).not.toThrow()
+    captureError(new Error('boom'))
+    await Promise.resolve()
+
+    expect(sentryInit).not.toHaveBeenCalled()
+    expect(recordsOf('error')[0]).toMatchObject({ appId: 'member', message: 'boom' })
+  })
+
+  it('toMonitorAdapter 的 sampleRate / enabled 与 core 传入的 appId / env 合并', () => {
+    const adapter = toMonitorAdapter({ enabled: false })
+
+    adapter.init?.({ appId: 'activity', env: testEnv })
+    trackEvent('click')
+    reportPerf('render', 10)
+
+    expect(collectedRecords()).toHaveLength(0)
+    expect(getState()).toMatchObject({
+      appId: 'activity',
+      enabled: false,
+      sampleRate: 0.15,
+    })
   })
 })
 

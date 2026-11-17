@@ -87,12 +87,20 @@ function malformedShape(label: string): ApiError {
   return new ApiError(SHAPE_ERROR_CODE, `${label}接口返回结构异常`)
 }
 
-/** 订单列表；返回结构不合法时以 ApiError 失败，调用方按「无数据」降级。 */
-export async function listOrders(query: OrderPageQuery): Promise<OrderListResult> {
+/**
+ * 订单列表；返回结构不合法时以 ApiError 失败，调用方按「无数据」降级。
+ *
+ * `options` 叠加在默认的静默配置之上：首屏页面传 `{ firstScreen: true }`，
+ * core 才会把这次响应计入「首屏接口返回」这一监控阶段（设计文档 10.1）。
+ */
+export async function listOrders(
+  query: OrderPageQuery,
+  options: RequestConfig = {},
+): Promise<OrderListResult> {
   const payload = await get<unknown>(
     '/api/member/orders',
     { page: query.page, size: query.size },
-    QUIET,
+    { ...QUIET, ...options },
   )
   if (!isOrderListResult(payload)) throw malformedShape('订单列表')
   return payload

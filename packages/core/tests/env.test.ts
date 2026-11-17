@@ -4,6 +4,7 @@ import { env, initEnv } from '../src/env'
 
 afterEach(() => {
   Reflect.deleteProperty(window.navigator, 'userAgent')
+  document.documentElement.removeAttribute('style')
   vi.unstubAllEnvs()
 })
 
@@ -185,5 +186,54 @@ describe('env 默认值', () => {
     expect(env.osVersion).toBe('16.3')
     expect(env.device).toBe('iPhone')
     expect(env.appVersion).toBe('5.6.0')
+  })
+})
+
+describe('Android 安全区兜底（设计文档 8.2）', () => {
+  const rootStyle = (): CSSStyleDeclaration => document.documentElement.style
+
+  it('env() 失效的机型用 statusBarHeight 兜底写回 --safe-top', async () => {
+    configureMock({
+      handlers: {
+        'app.getInfo': () => ({
+          os: 'android',
+          statusBarHeight: 24,
+          safeAreaTop: 0,
+          safeAreaBottom: 0,
+        }),
+      },
+    })
+
+    await initEnv({ appId: 'activity', isApp: true })
+
+    expect(rootStyle().getPropertyValue('--safe-top')).toBe('24px')
+    // 底部为 0 时不写，保留 CSS 里的 env() 兜底
+    expect(rootStyle().getPropertyValue('--safe-bottom')).toBe('')
+  })
+
+  it('原生给出 safeAreaTop / safeAreaBottom 时优先采用', async () => {
+    configureMock({
+      handlers: {
+        'app.getInfo': () => ({ statusBarHeight: 24, safeAreaTop: 44, safeAreaBottom: 34 }),
+      },
+    })
+
+    await initEnv({ appId: 'activity', isApp: true })
+
+    expect(rootStyle().getPropertyValue('--safe-top')).toBe('44px')
+    expect(rootStyle().getPropertyValue('--safe-bottom')).toBe('34px')
+  })
+
+  it('量测值全为 0 时一个变量都不写（浏览器不能盖掉 env() 兜底）', async () => {
+    configureMock({
+      handlers: {
+        'app.getInfo': () => ({ statusBarHeight: 0, safeAreaTop: 0, safeAreaBottom: 0 }),
+      },
+    })
+
+    await initEnv({ appId: 'activity', isApp: true })
+
+    expect(rootStyle().getPropertyValue('--safe-top')).toBe('')
+    expect(rootStyle().getPropertyValue('--safe-bottom')).toBe('')
   })
 })

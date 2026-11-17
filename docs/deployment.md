@@ -152,7 +152,7 @@ pnpm deploy --app member
 pnpm deploy --app member --env pre --version 0.2.0
 
 # 4) 真正上传第 1 步（不可撤销，必须两次确认）
-UPLOAD_CMD="rsync -av {src} {dest}" pnpm deploy --app member --execute --yes
+UPLOAD_CMD="rsync -av {src} {dest}" pnpm deploy --app member --env prod --execute --yes
 ```
 
 ## 7. 回滚流程
@@ -210,14 +210,14 @@ pnpm deploy --app <name> [--version <v>] [--env dev|test|pre|prod] [--execute] [
 pnpm deploy <name>            # 应用名也可以作为第一个位置参数
 ```
 
-| 参数            | 说明                                                                       |
-| --------------- | -------------------------------------------------------------------------- |
-| `--app <name>`  | 必填，必须是 `apps/` 下存在且含 `package.json` 的目录                      |
-| `--version <v>` | 覆盖 package.json 版本，格式 `x.y.z` 或 `x.y.z-tag`                        |
-| `--env <env>`   | `dev` / `test` / `pre` / `prod`，默认 `prod`；非 prod 会切换域名并醒目告警 |
-| `--execute`     | 真正执行上传，默认 dry-run 什么都不做                                      |
-| `--yes`         | 与 `--execute` 联用，二次确认上传不可撤销                                  |
-| `--help`        | 打印帮助                                                                   |
+| 参数            | 说明                                                                                                              |
+| --------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `--app <name>`  | 必填，小写字母开头、仅小写字母/数字/短横线（2-31 位），且是 `apps/` 下含 `package.json` 的目录                    |
+| `--version <v>` | 覆盖 package.json 版本，格式 `x.y.z` 或 `x.y.z-tag`                                                               |
+| `--env <env>`   | `dev` / `test` / `pre` / `prod`，**默认 `test`**；发 `prod` 必须显式写 `--env prod`，非 prod 会切换域名并醒目告警 |
+| `--execute`     | 真正执行上传，默认 dry-run 什么都不做                                                                             |
+| `--yes`         | 与 `--execute` 联用，二次确认上传不可撤销                                                                         |
+| `--help`        | 打印帮助                                                                                                          |
 
 dry-run 会打印：解析结果（应用 / 版本 / commit / 发布标识 / 环境 / CDN 目录 / 入口与版本化 HTML）、产物校验、缓存头策略、发布 5 步、回滚指令、发布记录模板。
 
