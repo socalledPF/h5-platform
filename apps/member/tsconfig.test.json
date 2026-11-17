@@ -1,0 +1,5 @@
+{
+  "//": "tests/ 的类型检查工程。继承包内 tsconfig 的编译器选项与 @h5/* 路径映射，只把 include 换成测试目录，让 src 工程保持只含 src/**：两个门禁互不污染（build 依赖 typecheck，测试类型错误不该被当成产物代码的类型错误）。src/**/*.d.ts 是环境声明（vite/client、@h5/styles），测试工程同样需要。",
+  "extends": "./tsconfig.json",
+  "include": ["tests/**/*.ts", "src/**/*.d.ts"]
+}

@@ -18,6 +18,8 @@ let defaultNav: NavMode = 'native'
 let router: Router | null = null
 let basePosition: number | null = null
 let backPressSubscribed = false
+/** 当前这套路由钩子的摘除函数；重复安装（同进程多个 App / 测试）时先摘掉旧的。 */
+let detachHooks: (() => void) | null = null
 const backHandlers: BackHandler[] = []
 const unsubscribers: (() => void)[] = []
 
@@ -272,23 +274,54 @@ export async function handleBackPress(): Promise<void> {
 
 /**
  * 安装导航：路由栈深度、标题同步、navMode 重算、原生返回拦截（设计文档 7.3）。
- * createH5App 调用一次即可。
+ * createH5App 调用一次即可；返回摘除函数，重复安装会先摘掉上一套钩子，避免钩子叠加。
  */
-export function installNavigation(nextRouter: Router): void {
+export function installNavigation(nextRouter: Router): () => void {
+  detachHooks?.()
   router = nextRouter
   basePosition = null
   routeStackDepth.value = 1
   navMode.value = resolveNavMode()
 
-  nextRouter.afterEach((to, _from, failure) => {
+  const stopAfterEach = nextRouter.afterEach((to, _from, failure) => {
     if (failure !== undefined) return
-    updateStackDepth(nextRouter)
-    navMode.value = resolveNavMode(to)
-    syncTitle(to)
+    applyRoute(to)
   })
 
   if (env.isApp) void bridgeNav.setBackInterceptor(true).catch(() => undefined)
   subscribeBackPress()
+
+  const detach = (): void => {
+    stopAfterEach()
+    if (detachHooks === detach) detachHooks = null
+  }
+  detachHooks = detach
+  return detach
+}
+
+/**
+ * 按当前路由同步标题 / 导航栏模式 / 栈深度（设计文档 7.2、7.3）。
+ *
+ * Vue Router 的初始导航是异步的，落地路由可能在 afterEach 注册之前就已结算
+ * （例如 router 在 createH5App 之前就被 push 过），那样落地页永远不会同步 title / navMode。
+ * createH5App 在路由就绪后显式调用一次兜底。
+ *
+ * 幂等：afterEach 已经跑过时再调用一次不会让栈深度叠加（深度取自 history.state.position，
+ * 同一位置重复计算得到同一结果），标题与模式也是覆盖式写入。
+ */
+export function syncCurrentRoute(to?: RouteLocationNormalized): void {
+  const current = to ?? router?.currentRoute.value
+  if (current === undefined) return
+  applyRoute(current)
+}
+
+/** 单次路由同步；`matched` 为空表示尚未解析（START_LOCATION），此时不动状态。 */
+function applyRoute(to: RouteLocationNormalized): void {
+  if (router === null) return
+  if (to.matched.length === 0) return
+  updateStackDepth(router)
+  navMode.value = resolveNavMode(to)
+  syncTitle(to)
 }
 
 /**
@@ -305,7 +338,10 @@ function updateStackDepth(current: Router): void {
 function readHistoryPosition(current: Router): number | null {
   try {
     const state = current.options.history.state as { position?: unknown } | undefined
-    return typeof state?.position === 'number' ? state.position : null
+    // 业务直接 replaceState({}) 会抹掉 position，vue-router 之后算出 NaN：按「拿不到」处理，
+    // 否则栈深度变成 NaN，返回时既不算 > 1 也不等于 1。
+    if (typeof state?.position !== 'number' || !Number.isFinite(state.position)) return null
+    return state.position
   } catch {
     return null
   }
@@ -336,8 +372,10 @@ function subscribeBackPress(): void {
   )
 }
 
-/** 仅供测试：解绑原事件、清空拦截器与深度。 */
+/** 仅供测试：解绑原事件、摘除路由钩子、清空拦截器与深度。 */
 export function resetNavigationState(): void {
+  detachHooks?.()
+  detachHooks = null
   for (const unsubscribe of unsubscribers) unsubscribe()
   unsubscribers.length = 0
   backHandlers.length = 0

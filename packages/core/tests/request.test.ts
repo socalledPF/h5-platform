@@ -3,7 +3,7 @@ import type { AxiosAdapter, AxiosResponse, InternalAxiosRequestConfig } from 'ax
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useAuthStore } from '../src/auth'
 import { ApiError, normalizeError } from '../src/errors'
-import { firstScreenStages, resetMonitorState } from '../src/monitor'
+import { resetMonitorState, setMonitorAdapter } from '../src/monitor'
 import { get, post, request, resetRequestState, setErrorNotifier, withCancel } from '../src/request'
 
 const bridgeMocks = vi.hoisted(() => ({
@@ -280,22 +280,29 @@ describe('withCancel（设计文档 6.3）', () => {
 })
 
 describe('首屏接口打点（设计文档 10.1）', () => {
-  const stages = (): string[] => firstScreenStages().map(([stage]) => stage)
+  /** 首屏阶段的属主是监控实现：core 只把「首个首屏接口返回」这一刻转交过去。 */
+  function createMonitor() {
+    const monitor = { markFirstScreenApi: vi.fn() }
+    setMonitorAdapter(monitor)
+    return monitor
+  }
 
   it('后台请求（能力预热、埋点上报）不记为首屏接口', async () => {
+    const monitor = createMonitor()
     const { adapter } = createAdapter(() => ({ status: 200, data: { code: 0, data: 1 } }))
 
     await request({ url: '/api/capabilities', adapter })
 
-    expect(stages()).not.toContain('first-screen-api')
+    expect(monitor.markFirstScreenApi).not.toHaveBeenCalled()
   })
 
   it('显式声明 firstScreen 的请求才记录首屏接口', async () => {
+    const monitor = createMonitor()
     const { adapter } = createAdapter(() => ({ status: 200, data: { code: 0, data: 1 } }))
 
     await request({ url: '/api/home', adapter, firstScreen: true })
 
-    expect(stages()).toContain('first-screen-api')
+    expect(monitor.markFirstScreenApi).toHaveBeenCalledTimes(1)
   })
 })
 

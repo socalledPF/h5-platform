@@ -26,7 +26,9 @@ describe('事件推送', () => {
     const first: string[] = []
     const second: string[] = []
     const unsubscribe = on('page.resume', () => first.push('first'))
-    const handler = (): void => second.push('second')
+    const handler = (): void => {
+      second.push('second')
+    }
     on('page.resume', handler)
 
     emitNativeEvent('page.resume')

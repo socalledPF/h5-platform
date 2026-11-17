@@ -50,15 +50,6 @@ export function monitorTrack(name: string, params?: Record<string, unknown>): vo
   }
 }
 
-/** 性能上报；未注入时静默。 */
-function monitorPerf(stage: string, durationMs: number): void {
-  try {
-    adapter?.reportPerf?.(stage, durationMs)
-  } catch {
-    // 同上
-  }
-}
-
 function toMessage(error: unknown): string {
   if (error instanceof Error) return error.message
   if (typeof error === 'string') return error
@@ -71,31 +62,26 @@ function toMessage(error: unknown): string {
 
 /* -------------------------------- 首屏打点（设计文档 10.1） -------------------------------- */
 
-/** 模块求值时刻 ≈ JS 执行开始（相对导航起点）。 */
-const JS_START_MS = now()
-let firstScreenApiAt: number | null = null
+/**
+ * 首屏阶段的**唯一属主**是 @h5/monitor：`markFirstScreen` 一次性产出整套阶段，
+ * 整批阶段共用同一个采样结果。core 只负责触发（外加一个本地 performance 标记），
+ * 不再自己拆阶段、也不再逐阶段 `reportPerf`——否则一屏会落地两套阶段、两套采样口径，
+ * §10.1 的 P50/P90 无法对齐。
+ */
 let firstScreenMarked = false
 
-function now(): number {
-  try {
-    if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
-      return performance.now()
-    }
-  } catch {
-    // 退化到 Date.now
-  }
-  return Date.now()
-}
-
-/** 首个接口返回时刻；只有第一次有效。 */
+/** 首屏接口返回时刻：交给监控实现记账（`markFirstScreen` 时一并产出该阶段）。 */
 export function markFirstScreenApi(): void {
-  if (firstScreenApiAt === null) firstScreenApiAt = now()
+  try {
+    adapter?.markFirstScreenApi?.()
+  } catch {
+    // 上报实现自身异常不得影响业务
+  }
 }
 
 /**
  * 首屏渲染完成（业务在首屏数据渲染后调用）：
- * 记录 HTML 到达 / JS 开始 / 首屏接口返回 / 渲染完成四个阶段并上报，
- * 同时把首屏标记交给注入的监控实现（Sentry / 打点）。
+ * 打一个本地 performance 标记便于排查，并把整批阶段的打点交给监控实现（只调一次）。
  */
 export function markFirstScreen(): void {
   if (firstScreenMarked) return
@@ -106,38 +92,6 @@ export function markFirstScreen(): void {
   } catch {
     // 同上
   }
-  for (const [stage, duration] of firstScreenStages()) monitorPerf(stage, duration)
-}
-
-/** 各阶段耗时（毫秒）；拿不到的值直接跳过，不上报 0。 */
-export function firstScreenStages(): [string, number][] {
-  const stages: [string, number][] = []
-  const htmlReady = readHtmlReadyMs()
-  if (htmlReady !== null) stages.push(['html-ready', htmlReady])
-  stages.push(['js-start', round(JS_START_MS)])
-  if (firstScreenApiAt !== null)
-    stages.push(['first-screen-api', round(firstScreenApiAt - JS_START_MS)])
-  stages.push(['render-done', round(now() - JS_START_MS)])
-  return stages
-}
-
-/** HTML 到达时刻：优先用 PerformanceNavigationTiming，退化到 performance.timing。 */
-function readHtmlReadyMs(): number | null {
-  try {
-    if (typeof performance === 'undefined') return null
-    const entries = performance.getEntriesByType?.('navigation')
-    const navigation = entries?.[0] as PerformanceNavigationTiming | undefined
-    if (navigation !== undefined && typeof navigation.responseEnd === 'number') {
-      return round(navigation.responseEnd)
-    }
-    const timing = (performance as Performance & { timing?: PerformanceTiming }).timing
-    if (timing !== undefined && timing.navigationStart > 0) {
-      return round(timing.responseEnd - timing.navigationStart)
-    }
-  } catch {
-    // 老容器可能没有 performance 条目
-  }
-  return null
 }
 
 function markPerformance(name: string): void {
@@ -150,14 +104,9 @@ function markPerformance(name: string): void {
   }
 }
 
-function round(value: number): number {
-  return Math.max(0, Math.round(value))
-}
-
 /** 仅供测试：重置首屏打点与错误缓冲。 */
 export function resetMonitorState(): void {
   adapter = undefined
   recentErrors.length = 0
-  firstScreenApiAt = null
   firstScreenMarked = false
 }

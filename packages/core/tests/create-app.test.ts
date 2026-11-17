@@ -1,25 +1,39 @@
 import { configureMock, invoke, track } from '@h5/bridge'
 // bridge 只导出 configureMock；resetMock 是其测试辅助（不从包入口导出），这里借来隔离用例。
+// eslint-disable-next-line no-restricted-syntax -- resetMock 是 bridge 的测试辅助，未从 @h5/bridge 入口导出，用例需要它重置 mock 状态；对外入口不因测试而扩大
 import { resetMock } from '../../bridge/src/mock'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRouter, createWebHistory } from 'vue-router'
 import type { Router } from 'vue-router'
 import { h } from 'vue'
 import { useAuthStore } from '../src/auth'
-import { createH5App } from '../src/create-app'
+import { createH5App, resetCreateAppState } from '../src/create-app'
 import { env } from '../src/env'
 import { markFirstScreen, resetMonitorState } from '../src/monitor'
+import {
+  installNavigation,
+  navMode,
+  resetNavigationState,
+  resolveNavMode,
+  routeStackDepth,
+  setDefaultNavMode,
+  syncCurrentRoute,
+} from '../src/navigation'
 import type { MonitorAdapter } from '../src/types'
 
-/** 每个用例都需要的监控桩：全部钩子都是 spy，便于断言 core 的调用点。 */
-function createMonitorSpy(): Required<MonitorAdapter> & { init: ReturnType<typeof vi.fn> } {
+/**
+ * 每个用例都需要的监控桩：全部钩子都是 spy，便于断言 core 的调用点。
+ * 每个 spy 都按 `MonitorAdapter` 的真实签名实例化，`mock.calls` 才能拿到带类型的参数
+ * （无签名的 `vi.fn()` 会让 `calls[0][1]` 退化成隐式 any）。
+ */
+function createMonitorSpy() {
   return {
-    init: vi.fn(),
-    captureError: vi.fn(),
-    reportBridgeError: vi.fn(),
-    trackEvent: vi.fn(),
-    markFirstScreen: vi.fn(),
-    reportPerf: vi.fn(),
+    init: vi.fn<Required<MonitorAdapter>['init']>(),
+    captureError: vi.fn<Required<MonitorAdapter>['captureError']>(),
+    reportBridgeError: vi.fn<Required<MonitorAdapter>['reportBridgeError']>(),
+    trackEvent: vi.fn<Required<MonitorAdapter>['trackEvent']>(),
+    markFirstScreen: vi.fn<Required<MonitorAdapter>['markFirstScreen']>(),
+    reportPerf: vi.fn<Required<MonitorAdapter>['reportPerf']>(),
   }
 }
 
@@ -58,7 +72,12 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllEnvs()
   resetMonitorState()
+  resetCreateAppState()
+  resetNavigationState()
   env.isApp = false
+  document.title = ''
+  // 必须保留 history.state：vue-router 依赖 state.position 记栈深度，清空会算出 NaN
+  window.history.replaceState(window.history.state, '', '/')
   Reflect.deleteProperty(window.navigator, 'userAgent')
   document.body.innerHTML = ''
 })
@@ -222,6 +241,84 @@ describe('createH5App（设计文档 4 统一启动入口）', () => {
   })
 })
 
+describe('落地路由同步（设计文档 7.2：首屏必须同步 title / navMode / 栈深度）', () => {
+  const Page = { render: () => h('div') }
+
+  function createLandingRouter(): Router {
+    return createRouter({
+      history: createWebHistory(),
+      routes: [
+        { path: '/', component: Page, meta: { title: '首页' } },
+        { path: '/orders', component: Page, meta: { title: '我的订单', nav: 'native' } },
+        { path: '/list', component: Page, meta: { title: '清单', nav: 'h5' } },
+      ],
+    })
+  }
+
+  it('初始导航先于钩子注册结算时，落地页仍同步 meta.title / navMode / 栈深度', async () => {
+    window.history.replaceState(window.history.state, '', '/orders')
+    document.title = '会员中心'
+    const router = createLandingRouter()
+    // 复现真实时序：落地导航在 createH5App 装钩子之前就已结算
+    await router.push('/orders')
+    await router.isReady()
+
+    const app = await createH5App(Root, { appId: 'member', router })
+    app.mount(prepareDocument())
+
+    expect(document.title).toBe('我的订单')
+    // meta.nav 必须压过「不在 App 内 → h5」的兜底
+    expect(navMode.value).toBe('native')
+    expect(navMode.value).toBe(resolveNavMode(router.currentRoute.value))
+    expect(routeStackDepth.value).toBe(1)
+  })
+
+  it('落地页 meta.nav: h5 同样生效', async () => {
+    window.history.replaceState(window.history.state, '', '/list')
+    document.title = '会员中心'
+    const router = createLandingRouter()
+    await router.push('/list')
+    await router.isReady()
+
+    const app = await createH5App(Root, { appId: 'member', router, defaultNav: 'native' })
+    app.mount(prepareDocument())
+
+    expect(document.title).toBe('清单')
+    expect(navMode.value).toBe('h5')
+    expect(navMode.value).toBe(resolveNavMode(router.currentRoute.value))
+    expect(routeStackDepth.value).toBe(1)
+  })
+
+  it('App 内 meta.nav: h5 由路由决定，而不是回落到 defaultNav', async () => {
+    env.isApp = true
+    setDefaultNavMode('native')
+    const router = createLandingRouter()
+    await router.push('/list')
+    await router.isReady()
+
+    installNavigation(router)
+    syncCurrentRoute()
+
+    expect(document.title).toBe('清单')
+    expect(navMode.value).toBe('h5')
+    expect(routeStackDepth.value).toBe(1)
+  })
+
+  it('同一 router 二次启动不叠加钩子：只同步一次，栈深度不翻倍', async () => {
+    window.history.replaceState(window.history.state, '', '/')
+    const router = createLandingRouter()
+    await createH5App(Root, { appId: 'member', router })
+    await createH5App(Root, { appId: 'member', router })
+
+    const setTitle = vi.spyOn(Document.prototype, 'title', 'set')
+    await router.push('/orders')
+
+    expect(setTitle).toHaveBeenCalledTimes(1)
+    expect(setTitle).toHaveBeenLastCalledWith('我的订单')
+    expect(routeStackDepth.value).toBe(2)
+  })
+})
+
 describe('白屏检测（设计文档 11.2）', () => {
   it('根节点 3 秒后仍无内容时上报最近错误', async () => {
     vi.useFakeTimers()
@@ -278,21 +375,16 @@ describe('白屏检测（设计文档 11.2）', () => {
 })
 
 describe('首屏打点（设计文档 10.1）', () => {
-  it('markFirstScreen 只上报一次，并带上各阶段耗时', async () => {
+  it('markFirstScreen 只触发一次监控打点，core 不再逐阶段 reportPerf', async () => {
     const monitor = createMonitorSpy()
     await createH5App(Root, { appId: 'member', router: createTestRouter(), monitor })
 
     markFirstScreen()
     markFirstScreen()
 
+    // 阶段的属主是监控实现：core 触发一次、由它一次性产出整套阶段并共用一个采样结果。
     expect(monitor.markFirstScreen).toHaveBeenCalledTimes(1)
-    const stages = monitor.reportPerf.mock.calls.map((call) => call[0])
-    expect(stages).toContain('js-start')
-    expect(stages).toContain('render-done')
-    for (const call of monitor.reportPerf.mock.calls) {
-      expect(typeof call[1]).toBe('number')
-      expect(call[1]).toBeGreaterThanOrEqual(0)
-    }
+    expect(monitor.reportPerf).not.toHaveBeenCalled()
   })
 })
 

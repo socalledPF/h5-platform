@@ -3,9 +3,9 @@ import { expect, test } from '@playwright/test'
 /**
  * 冒烟 E2E（设计文档 7.1 / 7.5）。
  *
- * 跑在 `createH5App` 的浏览器 mock 上：`playwright.config.ts` 只启动 `@h5/app-member` 的
- * dev server（baseURL 127.0.0.1:5173），因此 member 的页面直接可用；
- * 独立入口的应用（activity / bridge-playground）各有自己的 dev server，见文件末尾的 activity 用例。
+ * 跑在 `createH5App` 的浏览器 mock 上。`playwright.config.ts` 同时启动两个 dev server：
+ * member（baseURL 127.0.0.1:5173）与独立入口的 activity（127.0.0.1:5174），
+ * 因此下面的 activity 用例不再探测、不再跳过——活动页必须真的被跑过。
  *
  * 约定：只用 role / test-id 定位，断言等待交给 Playwright 的自动重试，不写 waitForTimeout。
  */
@@ -50,21 +50,11 @@ test.describe('沉浸式（nav=none）', () => {
   })
 })
 
-/**
- * activity 是独立入口，`playwright.config.ts` 的 webServer 不会启动它。
- * 这里探测它的 dev server（同时跑 member 时活动页会落在 5174）：探测不到就跳过，
- * 探测到就按验收要求断言「沉浸式头部存在、H5 导航栏标题不存在」。
- */
+/** activity 是独立入口，由 `playwright.config.ts` 的第二个 webServer 启动。 */
 const ACTIVITY_BASE_URL = process.env.E2E_ACTIVITY_BASE_URL ?? 'http://127.0.0.1:5174'
 
 test.describe('activity 活动页（独立入口）', () => {
   test('沉浸式头部渲染，且没有 H5 导航栏', async ({ page }) => {
-    const probe = await page.request.get(`${ACTIVITY_BASE_URL}/`).catch(() => null)
-    test.skip(
-      probe === null || !probe.ok(),
-      `未探测到 activity dev server（${ACTIVITY_BASE_URL}）：先运行 pnpm --filter @h5/app-activity dev`,
-    )
-
     await page.goto(`${ACTIVITY_BASE_URL}/?id=A2026&title=春日会员日&nav=none`)
 
     await expect(page.getByTestId('activity-header')).toBeVisible()

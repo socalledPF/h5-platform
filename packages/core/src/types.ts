@@ -42,6 +42,11 @@ export interface MonitorAdapter {
   reportBridgeError?: (method: string, code: number, msg: string) => void
   trackEvent?: (name: string, params?: Record<string, unknown>) => void
   markFirstScreen?: () => void
+  /**
+   * 首屏接口返回（core 的请求层触发）。首屏阶段的属主是监控实现，
+   * 由它记下这一刻并在 `markFirstScreen` 时一并产出 `first-screen-api` 阶段。
+   */
+  markFirstScreenApi?: () => void
   reportPerf?: (stage: string, durationMs: number) => void
 }
 

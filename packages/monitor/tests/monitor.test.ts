@@ -160,6 +160,7 @@ describe('initMonitor（设计文档 11.2）', () => {
       'captureError',
       'init',
       'markFirstScreen',
+      'markFirstScreenApi',
       'reportBridgeError',
       'reportPerf',
       'trackEvent',

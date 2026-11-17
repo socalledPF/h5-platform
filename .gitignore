@@ -16,3 +16,7 @@ docs/.vitepress/dist/
 docs/.vitepress/cache/
 .vscode/*
 !.vscode/extensions.json
+
+# Playwright 产物（e2e 与 CI artifact）
+test-results/
+playwright-report/

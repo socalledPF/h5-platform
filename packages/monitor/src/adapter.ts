@@ -1,7 +1,7 @@
 import type { MonitorAdapter } from '@h5/core'
 import { captureError, reportBridgeError } from './error'
 import { initMonitor } from './init'
-import { markFirstScreen, reportPerf } from './perf'
+import { markFirstScreen, markFirstScreenApi, reportPerf } from './perf'
 import { trackEvent } from './track'
 
 /** 业务侧静态配置：core 的 init 只传 appId / env，其余上报参数必须在这里给出。 */
@@ -42,7 +42,10 @@ export function toMonitorAdapter(config: MonitorAdapterConfig = {}): MonitorAdap
     captureError,
     reportBridgeError,
     trackEvent,
+    // 首屏阶段的属主是本包（perf.ts）：core 只触发一次 markFirstScreen 与首屏接口时刻，
+    // 阶段拆分、顺序与采样都在这里一次性完成，避免一屏落地两套阶段。
     markFirstScreen,
+    markFirstScreenApi,
     reportPerf,
   }
 }

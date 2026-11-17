@@ -10,6 +10,7 @@ import type { MockAdapter, NavTarget } from '@h5/bridge'
 import { createPinia, setActivePinia } from 'pinia'
 import { createApp } from 'vue'
 import type { App, Component, ComponentPublicInstance } from 'vue'
+import type { Router } from 'vue-router'
 import { bootstrapAuth, subscribeAuthChange, useAuthStore } from './auth'
 import { env, initEnv } from './env'
 import {
@@ -19,7 +20,13 @@ import {
   recentErrorMessages,
   setMonitorAdapter,
 } from './monitor'
-import { installNavigation, navMode, resolveNavMode, setDefaultNavMode } from './navigation'
+import {
+  installNavigation,
+  navMode,
+  resolveNavMode,
+  setDefaultNavMode,
+  syncCurrentRoute,
+} from './navigation'
 import type { AppEnv, CreateH5AppOptions } from './types'
 import { initVConsole } from './vconsole'
 
@@ -64,13 +71,32 @@ export async function createH5App(
 
   const app = createApp(rootComponent)
   app.use(pinia)
+  // 先装导航钩子再装 router：vue-router 的 install 会立刻发起落地导航，
+  // 钩子若注册在它之后，落地路由可能在钩子到位前就结算，首屏于是漏掉 title / navMode 同步。
+  unsubscribers.push(installNavigation(options.router))
   app.use(options.router)
   installVueErrorHandler(app)
-  installNavigation(options.router)
+  await syncLandingRoute(options.router)
 
   prefetchCapabilities()
   scheduleWhiteScreenCheck(options)
   return app
+}
+
+/**
+ * 落地路由同步（设计文档 7.2）：等初始导航结算后按 currentRoute 显式同步一次标题 /
+ * 导航栏模式 / 栈深度，兜住「钩子注册晚于初始导航」的时序窗口（幂等，不与 afterEach 冲突）。
+ * 初始导航失败不能挡住挂载——白屏比未同步更糟，因此按当前路由尽力同步后继续。
+ */
+async function syncLandingRoute(current: Router): Promise<void> {
+  if (typeof window !== 'undefined') {
+    try {
+      await current.isReady()
+    } catch {
+      // 初始导航失败：下面仍按 currentRoute 兜底同步
+    }
+  }
+  syncCurrentRoute()
 }
 
 /**
