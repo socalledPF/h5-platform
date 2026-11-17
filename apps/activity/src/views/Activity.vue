@@ -1,15 +1,21 @@
 <script setup lang="ts">
 import { goBack, navigate } from '@h5/core'
-import { useNavMode } from '@h5/hooks'
+import { useKeyboard, useNavMode } from '@h5/hooks'
 import { AppNavBar, AppPage } from '@h5/ui'
 import { showToast } from 'vant'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
 import { useCountdown } from '../composables/useCountdown'
 
 const route = useRoute()
 const { mode } = useNavMode()
+
+/**
+ * 软键盘状态（设计文档 8.3）：本页有底部固定 CTA，Android 键盘弹起时它会被顶起来，
+ * 所以键盘期间把它藏下去，由 .activity__spacer 保留占位，不产生跳动。
+ */
+const { visible: keyboardVisible } = useKeyboard()
 
 /** URL 参数驱动（设计文档 7.4）：打开方决定活动 id、标题与结束时间。 */
 const query = computed(() => ({
@@ -25,7 +31,19 @@ function readQuery(key: string): string | undefined {
 }
 
 // 结束时间在进入页面时确定：活动页的 URL 参数不会中途变化
-const { parts: countdownParts, ended: countdownEnded } = useCountdown(query.value.endAt)
+const {
+  parts: countdownParts,
+  ended: countdownEnded,
+  invalid: countdownInvalid,
+} = useCountdown(query.value.endAt)
+
+const countdownHint = computed(() => {
+  if (countdownInvalid.value) return '结束时间无法解析，倒计时不可用'
+  return countdownEnded.value ? '活动已结束，感谢参与' : '距离活动结束'
+})
+
+/** 邀请码选填：填了就随「立即参与」交给原生页面，不填不影响参与。 */
+const inviteCode = ref('')
 
 const modeLabel = computed(() => (mode.value === 'none' ? '沉浸式 nav=none' : `nav=${mode.value}`))
 
@@ -42,7 +60,11 @@ function back(): void {
 
 /** 打开原生页面（设计文档 7.4）：由原生路由处理，业务不拼 scheme 之外的逻辑。 */
 function join(): void {
-  void navigate({ route: `native://order/confirm?activity=${encodeURIComponent(query.value.id)}` })
+  const invite = inviteCode.value.trim()
+  const suffix = invite === '' ? '' : `&invite=${encodeURIComponent(invite)}`
+  void navigate({
+    route: `native://order/confirm?activity=${encodeURIComponent(query.value.id)}${suffix}`,
+  })
   showToast('已请求原生打开确认页')
 }
 </script>
@@ -65,16 +87,21 @@ function join(): void {
       <p class="activity__eyebrow" data-testid="activity-id">活动编号 {{ query.id }}</p>
       <h1 class="activity__title" data-testid="activity-title">{{ query.title }}</h1>
 
-      <div class="activity__countdown" data-testid="activity-countdown">
+      <div
+        v-if="countdownInvalid"
+        class="activity__invalid"
+        data-testid="activity-countdown-invalid"
+      >
+        时间无效
+      </div>
+      <div v-else class="activity__countdown" data-testid="activity-countdown">
         <div v-for="part in countdownParts" :key="part.label" class="activity__unit">
           <span class="activity__value">{{ part.value }}</span>
           <span class="activity__label">{{ part.label }}</span>
         </div>
       </div>
 
-      <p class="activity__hint">
-        {{ countdownEnded ? '活动已结束，感谢参与' : '距离活动结束' }}
-      </p>
+      <p class="activity__hint" data-testid="activity-hint">{{ countdownHint }}</p>
     </section>
 
     <section class="activity__rules">
@@ -88,11 +115,28 @@ function join(): void {
       </p>
     </section>
 
+    <!-- 真实输入框：聚焦后键盘弹起，用于验证 8.3 的「键盘期间隐藏底部固定栏」 -->
+    <section class="activity__form">
+      <van-field
+        v-model="inviteCode"
+        label="邀请码"
+        placeholder="选填，填写后随参与一起提交"
+        maxlength="20"
+        clearable
+        data-testid="activity-invite"
+      />
+    </section>
+
     <!-- 固定 CTA 的占位：CTA 高度 + 底部安全区，保证最后一条规则不被遮挡 -->
     <div class="activity__spacer" aria-hidden="true"></div>
 
     <!-- 底部固定 CTA：把内容垫到 home indicator 之上（设计文档 8.2） -->
-    <footer class="activity__cta" data-testid="activity-cta">
+    <footer
+      class="activity__cta"
+      :class="{ 'activity__cta--hidden': keyboardVisible }"
+      :aria-hidden="keyboardVisible"
+      data-testid="activity-cta"
+    >
       <van-button type="danger" block round data-testid="activity-join" @click="join">
         立即参与
       </van-button>
@@ -233,6 +277,22 @@ function join(): void {
   line-height: 1.6;
 }
 
+.activity__form {
+  margin: var(--space-lg) var(--space-md) 0;
+  overflow: hidden;
+  background-color: var(--color-bg);
+  border-radius: var(--radius-lg);
+}
+
+.activity__invalid {
+  margin-top: var(--space-lg);
+  padding: var(--space-xs) var(--space-md);
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  background-color: rgb(255 255 255 / 18%);
+  border-radius: var(--radius-md);
+}
+
 .activity__spacer {
   height: calc(var(--safe-bottom) + 76px);
 }
@@ -248,5 +308,15 @@ function join(): void {
   margin: 0 auto;
   padding: var(--space-md) var(--space-lg) calc(var(--space-md) + var(--safe-bottom));
   background-color: var(--color-bg);
+  transition:
+    transform 0.2s ease,
+    opacity 0.2s ease;
+}
+
+/* 键盘弹起期间藏起底部固定栏（设计文档 8.3）：只位移 + 透明，占位仍由 .activity__spacer 保留 */
+.activity__cta--hidden {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(100%);
 }
 </style>

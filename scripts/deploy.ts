@@ -3,6 +3,7 @@
  * deploy —— 按应用发布静态资源到 CDN、校验产物、打印上线与回滚指令（设计方案 §9）。
  *
  *   pnpm deploy --app <name> [--version <v>] [--env dev|test|pre|prod] [--execute --yes]
+ *              [--allow-dirty] [--allow-stale]
  *
  * 默认 dry-run：只解析 / 校验 / 打印计划，不访问网络、不上传任何文件。
  * 默认 --env 是 test（不是 prod）：忘记写 --env 不会误发线上，prod 必须显式指定。
@@ -22,6 +23,8 @@ const DEFAULT_ENVIRONMENT = 'test'
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/
 /** 应用名会被拼进 CDN 路径与上传命令字符串，与 create-app 同名规则，挡住 ../ 与 shell 元字符。 */
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{1,30}$/
+/** 拒绝发布时最多列出多少条未提交改动，避免刷屏。 */
+const DIRTY_LIST_LIMIT = 10
 
 type Environment = (typeof ENVIRONMENTS)[number]
 
@@ -61,7 +64,17 @@ const HELP = `deploy · 按应用发布到 CDN（设计方案 §9）
   --env <env>         dev | test | pre | prod，默认 ${DEFAULT_ENVIRONMENT}；发 prod 必须显式写 --env prod
   --execute           真正执行上传（默认 dry-run，什么都不做）
   --yes               与 --execute 联用，二次确认上传不可撤销
+  --allow-dirty       工作区有未提交改动时也继续（默认拒绝，见「发布前校验」）
+  --allow-stale       dist 比 HEAD 提交旧时也继续（默认拒绝，见「发布前校验」）
   --help, -h          显示本帮助
+
+发布前校验（dry-run 也执行；--help 不执行）
+  1. 工作区干净：git status --porcelain 非空则列出改动路径并拒绝发布，
+     因为发布标识里的 commit 无法证明就是 dist 的来源。覆盖：--allow-dirty
+  2. 产物不过期：apps/<app>/dist 中最新的文件 mtime 必须不早于 HEAD 提交时间
+     （git log -1 --format=%ct），否则打印「dist 构建于 …，HEAD 提交于 …」并拒绝发布，
+     防止「昨天构建、今天提交两次」把旧产物发成新 commit。覆盖：--allow-stale
+  两条都只是证据检查，不修改任何文件；git 读不到时只告警、不阻断（dry-run 同样适用）。
 
 do 什么
   1. 解析应用、版本与 git 短 hash，得到发布标识 <version>+<hash>
@@ -87,6 +100,7 @@ do 什么
   pnpm deploy --app member
   pnpm deploy member --env test --version 0.2.0
   pnpm deploy --app member --env prod --execute --yes
+  pnpm deploy --app member --allow-stale        # 明确接受比 HEAD 旧的产物
   UPLOAD_CMD="rsync -av {src} {dest}" pnpm deploy --app member --execute --yes
 `
 
@@ -121,6 +135,8 @@ type Options = {
   envExplicit: boolean
   execute: boolean
   yes: boolean
+  allowDirty: boolean
+  allowStale: boolean
   help: boolean
   errors: string[]
 }
@@ -130,6 +146,8 @@ type DistReport = {
   totalSize: number
   assetCount: number
   mapFiles: string[]
+  /** dist 内最新的文件 mtime（毫秒），用于判定产物是否比 HEAD 旧。 */
+  newestMtime: number
 }
 
 function readFlagValue(
@@ -159,6 +177,8 @@ function parseArgs(argv: string[]): Options {
     envExplicit: false,
     execute: false,
     yes: false,
+    allowDirty: false,
+    allowStale: false,
     help: false,
     errors: [],
   }
@@ -177,6 +197,14 @@ function parseArgs(argv: string[]): Options {
     }
     if (token === '--yes') {
       options.yes = true
+      continue
+    }
+    if (token === '--allow-dirty') {
+      options.allowDirty = true
+      continue
+    }
+    if (token === '--allow-stale') {
+      options.allowStale = true
       continue
     }
     if (token === '--app' || token.startsWith('--app=')) {
@@ -260,24 +288,113 @@ function readManifest(appDir: string): { name: string; version: string } {
   return { name, version }
 }
 
-function readGitShortHash(): { hash: string; warning: string | null } {
+/** 读 git 命令的输出去空行；git 不可用 / 不是仓库时返回 null（调用方决定告警还是阻断）。 */
+function readGitLines(args: string[]): string[] | null {
   try {
-    const hash = execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+    const output = execFileSync('git', args, {
       cwd: WORKSPACE_ROOT,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim()
-
-    if (hash === '') {
-      return { hash: 'nogit', warning: 'git 未返回 commit hash，发布标识退化为 nogit' }
-    }
-    return { hash, warning: null }
+    })
+    return output
+      .split('\n')
+      .map((line) => line.trimEnd())
+      .filter((line) => line !== '')
   } catch {
+    return null
+  }
+}
+
+function formatTimestamp(milliseconds: number): string {
+  const date = new Date(milliseconds)
+  const pad = (value: number): string => String(value).padStart(2, '0')
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  )
+}
+
+function readGitShortHash(): { hash: string; warning: string | null } {
+  const lines = readGitLines(['rev-parse', '--short', 'HEAD'])
+  if (lines === null) {
     return {
       hash: 'nogit',
       warning: '读不到 git commit（不是 git 仓库或 git 不可用），发布标识退化为 nogit',
     }
   }
+
+  const hash = lines[0] ?? ''
+  if (hash === '') {
+    return { hash: 'nogit', warning: 'git 未返回 commit hash，发布标识退化为 nogit' }
+  }
+  return { hash, warning: null }
+}
+
+/**
+ * S1 守卫一：工作区脏就拒绝发布。
+ * 发布标识里的 commit 只有在工作区干净时才等于 dist 的真实来源，否则可能是改了源码没提交、
+ * 或提交了没重新构建。返回 null 表示通过，返回字符串表示「放行但有告警」。
+ */
+function assertCleanTree(app: string, allowDirty: boolean): string | null {
+  const lines = readGitLines(['status', '--porcelain'])
+  if (lines === null) {
+    return '读不到 git status（不是 git 仓库或 git 不可用），已跳过「工作区干净」检查'
+  }
+  if (lines.length === 0) return null
+  if (allowDirty) {
+    return (
+      `工作区有 ${lines.length} 处未提交改动，已按 --allow-dirty 继续：` +
+      '发布标识里的 commit 可能与 dist 的真实来源不一致'
+    )
+  }
+
+  const list = lines
+    .slice(0, DIRTY_LIST_LIMIT)
+    .map((line) => `    - ${line.slice(3).trim()}`)
+    .join('\n')
+  const rest =
+    lines.length > DIRTY_LIST_LIMIT
+      ? `\n    … 其余 ${lines.length - DIRTY_LIST_LIMIT} 处未列出`
+      : ''
+
+  throw new CliError(
+    `工作区有 ${lines.length} 处未提交改动，无法证明 apps/${app}/dist 是用这个 commit 构建的：\n` +
+      `${list}${rest}\n` +
+      '请先提交（或 git stash）后再发布；确认要发布当前产物，加 --allow-dirty。',
+  )
+}
+
+/**
+ * S1 守卫二：dist 比 HEAD 旧就拒绝发布。
+ * 「昨天构建、今天提交两次」会把旧产物发成新 commit，§9.2 的 sourcemap 归属、§9.4 的回滚与
+ * 发布记录都会指向错误的版本。返回 null 表示通过，返回字符串表示「放行但有告警」。
+ */
+function assertFreshBuild(
+  app: string,
+  packageName: string,
+  newestMtime: number,
+  allowStale: boolean,
+): string | null {
+  const commitLines = readGitLines(['log', '-1', '--format=%ct'])
+  const commitSeconds =
+    commitLines === null ? Number.NaN : Number.parseInt(commitLines[0] ?? '', 10)
+  if (!Number.isFinite(commitSeconds) || commitSeconds <= 0) {
+    return '读不到 HEAD 提交时间（不是 git 仓库或 git 不可用），已跳过「产物是否过期」检查'
+  }
+
+  const commitTime = commitSeconds * 1000
+  if (newestMtime >= commitTime) return null
+
+  const detail = `dist 构建于 ${formatTimestamp(newestMtime)}，HEAD 提交于 ${formatTimestamp(commitTime)}`
+  if (allowStale) {
+    return `产物比 HEAD 旧（${detail}），已按 --allow-stale 继续：上传的可能是更早的构建`
+  }
+
+  throw new CliError(
+    `apps/${app}/dist 比 HEAD 旧，拒绝发布：${detail}。\n` +
+      `请重新构建后再发布：pnpm --filter ${packageName} build。\n` +
+      '确认要发布这份旧产物，加 --allow-stale。',
+  )
 }
 
 function scanDist(distDir: string): DistReport {
@@ -285,6 +402,7 @@ function scanDist(distDir: string): DistReport {
   let fileCount = 0
   let totalSize = 0
   let assetCount = 0
+  let newestMtime = 0
 
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -294,15 +412,17 @@ function scanDist(distDir: string): DistReport {
         continue
       }
       if (!entry.isFile()) continue
+      const stats = statSync(full)
       fileCount += 1
-      totalSize += statSync(full).size
+      totalSize += stats.size
+      if (stats.mtimeMs > newestMtime) newestMtime = stats.mtimeMs
       if (entry.name.endsWith('.map')) mapFiles.push(relative(distDir, full))
       if (/^assets[/\\]/.test(relative(distDir, full))) assetCount += 1
     }
   }
 
   walk(distDir)
-  return { fileCount, totalSize, assetCount, mapFiles }
+  return { fileCount, totalSize, assetCount, mapFiles, newestMtime }
 }
 
 function verifyDist(app: string, packageName: string): { distDir: string; report: DistReport } {
@@ -355,6 +475,7 @@ function printHeader(context: {
   release: string
   hash: string
   hashWarning: string | null
+  guardWarnings: string[]
   env: Environment
   entryHost: string
   cdnHost: string
@@ -388,6 +509,9 @@ function printHeader(context: {
   }
   if (context.hashWarning !== null) {
     console.log(`  ${yellow('警告')}：${context.hashWarning}`)
+  }
+  for (const warning of context.guardWarnings) {
+    console.log(`  ${yellow('警告')}：${warning}`)
   }
 }
 
@@ -498,10 +622,19 @@ function main(argv: string[]): number {
   const env = options.env
   const { name: packageName, version: manifestVersion } = readManifest(appDir)
   const version = options.version ?? manifestVersion
-  const { hash, warning: hashWarning } = readGitShortHash()
-  const release = `${version}+${hash}`
+
+  // 两条 S1 守卫在 dry-run 里也执行（很便宜，而且正是 dry-run 最该暴露的问题）。
+  const guardWarnings: string[] = []
+  const dirtyWarning = assertCleanTree(app, options.allowDirty)
+  if (dirtyWarning !== null) guardWarnings.push(dirtyWarning)
 
   const { distDir, report } = verifyDist(app, packageName)
+
+  const staleWarning = assertFreshBuild(app, packageName, report.newestMtime, options.allowStale)
+  if (staleWarning !== null) guardWarnings.push(staleWarning)
+
+  const { hash, warning: hashWarning } = readGitShortHash()
+  const release = `${version}+${hash}`
 
   const { entry, cdn, source } = resolveHosts(env)
   const cdnBase = `https://${cdn}/h5/${app}/${release}/`
@@ -517,6 +650,7 @@ function main(argv: string[]): number {
     release,
     hash,
     hashWarning,
+    guardWarnings,
     env,
     entryHost: entry,
     cdnHost: cdn,

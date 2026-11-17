@@ -40,9 +40,33 @@ export function setBridgeErrorReporter(fn: BridgeErrorReporter | null): void {
   errorReporter = fn
 }
 
-/** 非 0 且非用户取消的结果统一上报（设计文档 11.2）；上报钩子异常不影响主流程。 */
+/**
+ * 不上报的错误码（模块私有）。
+ *
+ * 只对外暴露判定函数 `isReportableBridgeFailure()`，不导出这个集合本身：
+ * 集合是可变引用，一旦被外部改写，两侧口径会以最难查的方式漂移。
+ */
+const UNREPORTED_CODES: ReadonlySet<number> = new Set([CODE.OK, CODE.CANCELED, CODE.NOT_IN_APP])
+
+/**
+ * 该错误码是否计入 §11.2 客户端兼容性指标——bridge 与 @h5/monitor 共用的**唯一口径**。
+ *
+ * monitor 侧必须 import 本函数做过滤决策，禁止各自维护一份排除集（两份真值迟早漂移）。
+ * 纯函数：无副作用、不触发上报、不依赖通道状态，只回答「这个码算不算客户端问题」。
+ *
+ * - `0` 成功、`1003` 用户取消：都不是失败；
+ * - `-2` 不在 App 内：属「运行环境事实」——未配 mock 的浏览器、未注入桥的 WebView
+ *   每次启动都会产生，不是客户端兼容性问题，计入指标只会灌噪声；
+ * - `1001`（方法不存在）必须计入：那是「App 版本过旧」的真信号；
+ * - 未识别的原生新码一律计入：宁可多报，不可漏掉真信号。
+ */
+export function isReportableBridgeFailure(code: number): boolean {
+  return !UNREPORTED_CODES.has(code)
+}
+
+/** 可上报的失败统一上报（设计文档 11.2，口径见 isReportableBridgeFailure）；上报钩子异常不影响主流程。 */
 export function reportBridgeError(method: string, code: number, msg: string): void {
-  if (code === CODE.OK || code === CODE.CANCELED || errorReporter === null) return
+  if (!isReportableBridgeFailure(code) || errorReporter === null) return
   try {
     errorReporter(method, code, msg)
   } catch {

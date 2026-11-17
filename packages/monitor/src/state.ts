@@ -93,11 +93,16 @@ export function setNetwork(type: string): void {
 }
 
 /**
- * 公共字段（设计文档 11.2）：业务、版本、App 版本、系统及版本、机型、网络、路由、脱敏 uid。
+ * 公共字段（设计文档 11.2）：业务、版本、App 版本、系统及版本、机型、网络、路由、uid。
  * 每条上报都必须带上，否则线上无法定位到具体版本与机型。
+ *
+ * `uid` 是会话级假名（见 resolveUid），追加的 `uidSource` 显式标出它的来源
+ * （`'token-hash'` / `'anon'`），下游不必再猜这个字段到底是不是真实 uid。
+ * 两个字段都是追加的：`uid` 字段名保持不变，已有看板与告警口径不受影响。
  */
 export function commonFields(): Record<string, unknown> {
   const env = state.env
+  const { uid, uidSource } = resolveUid()
   return {
     appId: state.appId,
     h5Version: readH5Version(),
@@ -106,7 +111,8 @@ export function commonFields(): Record<string, unknown> {
     device: env?.device ?? 'unknown',
     network: state.network,
     route: currentRoute(),
-    uid: maskedUid(),
+    uid,
+    uidSource,
   }
 }
 
@@ -131,6 +137,11 @@ export function pushRecentError(message: string): void {
 
 export function recentErrorText(): string {
   return recentErrors.join(' | ')
+}
+
+/** 最近错误的数组形态；与 core 内联白屏检测的 `recentErrorMessages()` 同形，避免两份上下文格式不一致。 */
+export function recentErrorMessages(): string[] {
+  return [...recentErrors]
 }
 
 /** 仅供测试：读取已采集的记录。 */
@@ -184,12 +195,47 @@ function currentRoute(): string {
   }
 }
 
-/** uid 脱敏：只保留首尾各 2 位，未登录标记 anon。 */
-function maskedUid(): string {
+/** `uid` 字段的来源：token 哈希（会话级假名）或未登录。 */
+export type UidSource = 'token-hash' | 'anon'
+
+/** FNV-1a 32 位的偏移基与质数。 */
+const FNV_OFFSET_BASIS = 0x811c9dc5
+const FNV_PRIME = 0x01000193
+const UID_PREFIX = 'u_'
+
+/**
+ * uid 上报值：**会话级用户假名**，不是真实 uid，且绝不包含 token 的任何片段。
+ *
+ * - 取当前 token 的 FNV-1a 32 位（非加密）哈希，定长渲染为 `u_` + 8 位十六进制：
+ *   定长所以不泄露 token 长度，哈希不可逆所以无法从上报值还原 token。
+ * - 哈希只依赖 token 本身，同一 token 恒定 —— §11.2 的按用户聚合因此成立。
+ * - token 被重新签发（换会话登录、换账号）后假名随之改变：这是**会话级**假名，
+ *   跨会话无法把同一账号串联起来。Bridge 没有原生 uid 方法（见
+ *   docs/bridge-protocol.md 的方法清单，且与客户端约定不新增），要做到跨会话稳定
+ *   必须由原生补一个 uid 方法。
+ * - 未登录（无 token）时为 `'anon'`，`uidSource` 标记为 `'anon'`。
+ * - 32 位哈希必然有碰撞：按生日界，约 7.7 万个不同 token 就有 50% 概率撞上一对。
+ *   用来“按用户看错误分布”足够，但**不能**当唯一标识；要唯一标识必须由原生给 uid。
+ *
+ * 旧实现把 token 首尾各 2 位（`ab***gh`）当 uid：4 个真实凭证字符随每条上报进入
+ * Sentry / 埋点（Sentry 的 beforeSend 只清洗 token 形状的字段名，`uid` 下的片段
+ * 不会被命中），同时因为 token 每次刷新都变而破坏按用户聚合。本实现同时修掉这两点。
+ */
+function resolveUid(): { uid: string; uidSource: UidSource } {
   const token = readToken()
-  if (token === null) return 'anon'
-  if (token.length <= 4) return '***'
-  return `${token.slice(0, 2)}***${token.slice(-2)}`
+  if (token === null) return { uid: 'anon', uidSource: 'anon' }
+  const hex = fnv1a32(token).toString(16).padStart(8, '0')
+  return { uid: `${UID_PREFIX}${hex}`, uidSource: 'token-hash' }
+}
+
+/** FNV-1a 32 位哈希：只求稳定、定长、不可逆，不用于任何安全用途。 */
+function fnv1a32(text: string): number {
+  let hash = FNV_OFFSET_BASIS
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, FNV_PRIME)
+  }
+  return hash >>> 0
 }
 
 function readToken(): string | null {

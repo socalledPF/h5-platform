@@ -3,6 +3,7 @@ import { invoke } from './core'
 import { CODE, reportBridgeError } from './error'
 import { isMockActive } from './mock'
 import { METHODS } from './protocol'
+import type { BridgeMethod } from './protocol'
 
 /**
  * 隐式自动探测的失败次数上限。
@@ -96,8 +97,11 @@ export function warmCapabilities(): void {
  * 能力仍为「未知」时（含探测载荷不合法而未缓存的情况）保持乐观：返回 true 并继续尝试探测。
  * 理由：把「未知」当成「不支持」会在旧版 App 上一次性关掉全部能力功能，且写死缓存后无法自愈；
  * 乐观放行只会让个别功能在真正调用时以 1001/-2 失败，错误可被捕获与上报，退化更温和。
+ *
+ * 参数收窄为 `BridgeMethod`：方法名只能取自 METHODS，写错（如 `'share.opne'`）在编译期报错，
+ * 而不是静默返回 false 让功能永久消失。需要探测任意字符串时请显式断言类型，不要放宽本签名。
  */
-export function canIUse(method: string): boolean {
+export function canIUse(method: BridgeMethod): boolean {
   if (cachedCapabilities !== null) return cachedCapabilities.includes(method)
   warmCapabilities()
   return isAvailable() || isMockActive()

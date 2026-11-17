@@ -4,7 +4,7 @@ import { nav as bridgeNav, on as onBridgeEvent } from '@h5/bridge'
 import { goBack, navMode } from '@h5/core'
 import type { NavBarButton } from '@h5/bridge'
 import type { AppNavBarProps } from '../types'
-import { readSafeInset } from '../safe-area'
+import { safeInsetValue } from '../safe-area'
 
 defineOptions({ name: 'AppNavBar' })
 
@@ -23,8 +23,9 @@ const resolvedMode = computed(() => props.mode ?? navMode.value)
 const isH5 = computed(() => resolvedMode.value === 'h5')
 const rightButtons = computed(() => props.right ?? [])
 
-// setup 阶段就取一次：首帧就带上安全区，避免状态栏区域闪一下
-const safeTop = ref(props.immersive ? 0 : readSafeInset('top'))
+// setup 阶段就取一次：首帧就带上安全区，避免状态栏区域闪一下。
+// 真值是根元素上的 --safe-top（core / styles 写的），组件只在变量缺失时回落到 px 兜底。
+const safeTop = ref(props.immersive ? '0px' : safeInsetValue('top'))
 
 /** 自己发布过哪些按钮，原生回调里只转发生效的那些。 */
 const publishedIds = new Set<string>()
@@ -35,7 +36,7 @@ function ignoreBridgeFailure(): void {
 }
 
 function refreshSafeTop(): void {
-  safeTop.value = props.immersive ? 0 : readSafeInset('top')
+  safeTop.value = props.immersive ? '0px' : safeInsetValue('top')
 }
 
 function syncNativeBar(): void {
@@ -66,7 +67,7 @@ function handleNativeRightButtonClick(button: NavBarButton): void {
 const rootClass = computed(() => (isH5.value ? 'app-nav-bar--h5' : 'app-nav-bar--empty'))
 
 const rootStyle = computed<Record<string, string>>(() => {
-  const style: Record<string, string> = { '--app-nav-safe-top': `${safeTop.value}px` }
+  const style: Record<string, string> = { '--app-nav-safe-top': safeTop.value }
   if (props.backgroundColor !== undefined) style.backgroundColor = props.backgroundColor
   if (props.textColor !== undefined) style.color = props.textColor
   return style

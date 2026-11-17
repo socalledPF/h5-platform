@@ -1,6 +1,6 @@
 import { installBridgeGlobal, postToNative } from './channel'
 import { BridgeError, CODE, normalizeBridgeResult, reportBridgeError } from './error'
-import { isMockActive, mockInvoke } from './mock'
+import { isMockActive, mockInvoke, setMockEventSink } from './mock'
 import { BRIDGE_VERSION, DEFAULT_TIMEOUT_MS } from './protocol'
 import type { BridgeEventName, BridgeEventPayload } from './types'
 
@@ -122,10 +122,21 @@ function ensureBridgeGlobal(): void {
 }
 
 ensureBridgeGlobal()
+// mock 分支没有原生通道，登录态等事件由 mock 经同一个派发器推送，保证订阅侧无差别。
+setMockEventSink(handleNativeEmit)
 
-/** 仅供测试：清空挂起调用与事件订阅，避免用例之间互相影响。 */
+/**
+ * 仅供测试：清空挂起调用与事件订阅，避免用例之间互相影响。
+ *
+ * 挂起调用必须显式结算：只清 Map 会让调用方的 Promise 永远悬着（既不 resolve 也不 reject），
+ * 用例随后 await 它就永久挂起。用 `-2` 拒绝：原生侧已无法再回调，语义与「不在 App 内」一致，
+ * 且该码不上报（见 error.ts），测试 / 环境重建不会污染 11.2 的失败指标。
+ */
 export function resetBridgeCore(): void {
-  for (const call of pendingCalls.values()) clearTimeout(call.timer)
+  for (const call of pendingCalls.values()) {
+    clearTimeout(call.timer)
+    call.reject(new BridgeError(CODE.NOT_IN_APP, 'bridge reset', call.method))
+  }
   pendingCalls.clear()
   listeners.clear()
   callbackSeq = 0

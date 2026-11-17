@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { canIUse, invoke, METHODS } from '@h5/bridge'
+import type { BridgeMethod } from '@h5/bridge'
 import { env } from '@h5/core'
 import { AppNavBar, AppPage } from '@h5/ui'
 import { computed, onMounted, ref } from 'vue'
@@ -23,7 +24,7 @@ const supportedCount = computed(() => {
 })
 
 /** 能力列表刷新后重新计算（读取 version 建立响应式依赖）。 */
-function supported(method: string): boolean {
+function supported(method: BridgeMethod): boolean {
   void capabilityVersion.value
   if (capabilities.value !== null) return capabilities.value.includes(method)
   return canIUse(method)

@@ -48,9 +48,39 @@ function mountKeyboard(): { visible: Ref<boolean>; height: Ref<number> } {
   return result
 }
 
+function setLayoutHeight(next: number): void {
+  Object.defineProperty(window, 'innerHeight', { configurable: true, value: next })
+}
+
+/**
+ * 模拟旋转 / 地址栏变化：布局视口和视觉视口一起变。
+ * 两个事件的到达顺序在真机上不保证，两种顺序都模拟一遍。
+ */
+function rotate(
+  nextLayoutHeight: number,
+  nextViewportHeight: number,
+  order: 'window-first' | 'viewport-first' = 'window-first',
+): void {
+  setLayoutHeight(nextLayoutHeight)
+  viewport.height = nextViewportHeight
+  const layoutEvent = (): void => {
+    window.dispatchEvent(new Event('resize'))
+  }
+  const viewportEvent = (): void => {
+    viewport.dispatchEvent(new Event('resize'))
+  }
+  if (order === 'window-first') {
+    layoutEvent()
+    viewportEvent()
+  } else {
+    viewportEvent()
+    layoutEvent()
+  }
+}
+
 beforeEach(() => {
   viewport = new FakeVisualViewport(LAYOUT_HEIGHT)
-  Object.defineProperty(window, 'innerHeight', { configurable: true, value: LAYOUT_HEIGHT })
+  setLayoutHeight(LAYOUT_HEIGHT)
   Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport })
   scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined)
   coreMock.env.os = 'ios'
@@ -87,6 +117,88 @@ describe('useKeyboard', () => {
     const keyboard = mountKeyboard()
 
     viewport.press(LAYOUT_HEIGHT - 40)
+
+    expect(keyboard.visible.value).toBe(false)
+    expect(keyboard.height.value).toBe(0)
+  })
+
+  it('收起状态旋转（800→400）：visible 保持 false，键盘按新基线量', () => {
+    const keyboard = mountKeyboard()
+
+    rotate(400, 400)
+
+    expect(keyboard.visible.value).toBe(false)
+
+    // 新基线 400：键盘 250 高 → height 250；若仍用旧基线 800 会得到 550
+    viewport.press(150)
+
+    expect(keyboard.visible.value).toBe(true)
+    expect(keyboard.height.value).toBe(250)
+  })
+
+  it('收起状态旋转：视觉视口事件先到也不会误判键盘', () => {
+    const keyboard = mountKeyboard()
+
+    rotate(400, 400, 'viewport-first')
+
+    expect(keyboard.visible.value).toBe(false)
+
+    viewport.press(150)
+
+    expect(keyboard.visible.value).toBe(true)
+    expect(keyboard.height.value).toBe(250)
+  })
+
+  it('orientationchange 也会重设基线', () => {
+    const keyboard = mountKeyboard()
+
+    setLayoutHeight(400)
+    viewport.height = 400
+    window.dispatchEvent(new Event('orientationchange'))
+
+    expect(keyboard.visible.value).toBe(false)
+
+    viewport.press(150)
+
+    expect(keyboard.visible.value).toBe(true)
+    expect(keyboard.height.value).toBe(250)
+  })
+
+  it('键盘可见期间旋转：不重设基线，仍为 true', () => {
+    const keyboard = mountKeyboard()
+
+    viewport.press(LAYOUT_HEIGHT - 320)
+    rotate(400, 240)
+
+    expect(keyboard.visible.value).toBe(true)
+  })
+
+  it('键盘可见期间旋转后再收起键盘：能回到 false（基线随之恢复）', () => {
+    const keyboard = mountKeyboard()
+
+    viewport.press(LAYOUT_HEIGHT - 320)
+    rotate(400, 240)
+    viewport.press(400)
+
+    expect(keyboard.visible.value).toBe(false)
+    expect(keyboard.height.value).toBe(0)
+  })
+
+  it('部分 iOS 只推 visualViewport.scroll 时也能识别键盘', () => {
+    const keyboard = mountKeyboard()
+
+    viewport.height = LAYOUT_HEIGHT - 300
+    viewport.dispatchEvent(new Event('scroll'))
+
+    expect(keyboard.visible.value).toBe(true)
+    expect(keyboard.height.value).toBe(300)
+  })
+
+  it('没有 visualViewport 时静默降级', () => {
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined })
+
+    const keyboard = mountKeyboard()
+    window.dispatchEvent(new Event('resize'))
 
     expect(keyboard.visible.value).toBe(false)
     expect(keyboard.height.value).toBe(0)

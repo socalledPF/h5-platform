@@ -21,13 +21,35 @@ const STORAGE_PREFIX = 'h5:bridge:mock:'
 
 const MOCK_APP_VERSION = 'mock'
 
+/** `effectiveType` → 协议网络类型。`slow-2g` 归到 `2g`：协议里没有更细的档位。 */
+const EFFECTIVE_TYPE_MAP: Readonly<Record<string, NetworkInfo['type']>> = {
+  'slow-2g': '2g',
+  '2g': '2g',
+  '3g': '3g',
+  '4g': '4g',
+  '5g': '5g',
+}
+
 let adapter: MockAdapter | null = null
+
+/** mock 登录态：`auth.login` 写入、`auth.logout` 清空；`auth.getToken` 优先返回它。 */
+let sessionToken: string | null = null
+let loginSeq = 0
+
+/** mock 分支的事件出口，由 core 注册（避免 mock ↔ core 的循环依赖）。 */
+let eventSink: ((event: string, data: unknown) => void) | null = null
 
 const memoryStorage = new Map<string, string>()
 
-/** 开启浏览器 mock 并注入 UI / token / 存储实现；重复调用以最后一次为准。 */
+/** 仅供 core 注册：mock 需要推送 `auth.change` 时走同一个派发器。 */
+export function setMockEventSink(sink: ((event: string, data: unknown) => void) | null): void {
+  eventSink = sink
+}
+
+/** 开启浏览器 mock 并注入 UI / token / 存储实现；重复调用以最后一次为准（mock 会话同时重置）。 */
 export function configureMock(next: MockAdapter): void {
   adapter = next
+  sessionToken = null
 }
 
 /** 当前是否路由到 mock 分支。 */
@@ -38,6 +60,7 @@ export function isMockActive(): boolean {
 /** 仅供测试重置 mock 状态（不从包入口导出）。 */
 export function resetMock(): void {
   adapter = null
+  sessionToken = null
   memoryStorage.clear()
 }
 
@@ -74,7 +97,10 @@ async function callMock(
     case METHODS.auth.refreshToken:
       return mockToken(current, method)
     case METHODS.auth.login:
+      mockLogin()
+      return undefined
     case METHODS.auth.logout:
+      mockLogout()
       return undefined
     case METHODS.nav.open:
       mockNavOpen(current, params)
@@ -102,6 +128,10 @@ async function callMock(
       mockAlert(current, params)
       return undefined
     case METHODS.share.open:
+      // 取消是协议的一等结果：开启 cancelShare 后走 1003 分支，浏览器里可演练「用户取消」。
+      if (current.cancelShare === true) {
+        throw new BridgeError(CODE.CANCELED, 'mock: 用户取消分享', method)
+      }
       mockShare(current, params)
       return undefined
     case METHODS.device.getNetwork:
@@ -152,12 +182,36 @@ function mockAppInfo(): AppInfo {
 
 async function mockToken(current: MockAdapter, method: string): Promise<TokenResult> {
   const provider = current.getToken
-  if (provider === undefined) {
-    return { token: 'mock-token', expireAt: Date.now() + MOCK_TOKEN_TTL_MS }
+  if (provider !== undefined) {
+    // 注入的 provider 是权威来源（@h5/core 注入自己的 token store），mock 会话 token 不得覆盖它
+    const token = await provider()
+    if (token === null) throw new BridgeError(CODE.DENIED, 'mock: 未登录', method)
+    return token
   }
-  const token = await provider()
-  if (token === null) throw new BridgeError(CODE.DENIED, 'mock: 未登录', method)
-  return token
+  // 未注入 provider 时用 mock 会话 token，让「登录 → 取 token」闭环在浏览器里可跑
+  return { token: sessionToken ?? 'mock-token', expireAt: Date.now() + MOCK_TOKEN_TTL_MS }
+}
+
+/**
+ * mock 登录：写入一个每次登录都不同的 mock token 并推送 `auth.change`。
+ *
+ * 每次登录换一个 token，才能在浏览器里演练设计文档 6.1 的换账号分支（上一个 token 非空且不同 → 整页刷新）。
+ */
+function mockLogin(): void {
+  loginSeq += 1
+  sessionToken = `mock-login-${loginSeq}`
+  emitAuthChange(sessionToken)
+}
+
+/** mock 登出：清空 mock 登录态并推送 `auth.change`（载荷 token 为 null）。 */
+function mockLogout(): void {
+  sessionToken = null
+  emitAuthChange(null)
+}
+
+function emitAuthChange(token: string | null): void {
+  if (eventSink === null) return
+  eventSink('auth.change', { token })
 }
 
 function mockNavOpen(current: MockAdapter, params: Record<string, unknown>): void {
@@ -236,7 +290,11 @@ function mockShare(current: MockAdapter, params: Record<string, unknown>): void 
 function mockNetwork(): NetworkInfo {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return { type: 'none' }
   const effectiveType = readEffectiveType()
-  return effectiveType === undefined ? { type: 'unknown' } : { type: 'unknown', effectiveType }
+  const mapped = effectiveType === undefined ? undefined : EFFECTIVE_TYPE_MAP[effectiveType]
+  if (mapped !== undefined && effectiveType !== undefined) return { type: mapped, effectiveType }
+  // 浏览器无法区分 wifi 与蜂窝网络（navigator.connection 不给传输介质，只有带宽档位），
+  // 因此「在线但拿不到 effectiveType」时只能近似成 wifi；真实类型由原生 device.getNetwork 给出。
+  return { type: 'wifi' }
 }
 
 function readEffectiveType(): string | undefined {

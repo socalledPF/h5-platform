@@ -1,4 +1,4 @@
-import { CODE } from '@h5/bridge'
+import { isReportableBridgeFailure } from '@h5/bridge'
 import type { App } from 'vue'
 import { sentryCapture } from './sentry'
 import {
@@ -101,12 +101,22 @@ export function resetErrorHandlers(): void {
 
 /**
  * Bridge 失败上报（设计文档 11.2、12.2）：
- * 非 0 且非用户取消（1003）的结果统一上报，用于发现客户端兼容问题。
- * 用户取消是正常交互，不应进入告警。
+ * 成功、用户取消、不在 App 内都不算失败，其余结果统一上报，用于发现客户端兼容问题。
+ * 用户取消是正常交互，不该进入告警；不在 App 内是「运行环境」事实（未配 mock 的浏览器 /
+ * 未注入 bridge 的 WebView 每次启动都会产生），同样不进指标。
+ *
+ * 过滤口径**直接复用** `@h5/bridge` 的 `isReportableBridgeFailure()`（排除集在该包内私有，
+ * 故意不导出：可变引用会被外部改写，让两侧口径以最难查的方式漂移）。两侧共用一份实现，
+ * §11.2 的客户端兼容性指标就不会被单边污染。
+ *
+ * 注意（容易误判成死代码）：bridge 在调用注入的上报钩子**之前**就已经用同一口径过滤过，
+ * 所以对「来自 bridge 的码」这层守卫是冗余的。它不是冗余代码，价值在于覆盖从**其它入口**
+ * 进来的码——monitor 自己捕获的错误、以及将来直连原生回调 / 事件的上报路径，都可能带着
+ * `-2` 之类的结果码直接进到这里。
  */
 export function reportBridgeError(method: string, code: number, msg: string): void {
   if (!isEnabled()) return
-  if (code === CODE.OK || code === CODE.CANCELED) return
+  if (!isReportableBridgeFailure(code)) return
   const payload: Record<string, unknown> = {
     ...commonFields(),
     method,

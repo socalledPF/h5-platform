@@ -84,8 +84,11 @@ window.__H5Bridge.emit('network.change', { type: 'wifi' })
 补充约定：
 
 - H5 侧所有失败都以 `BridgeError` 抛出，携带 `code`（错误码）与 `method`（方法名），便于按方法聚合。
-- 非 `0` 且非 `1003` 的结果统一经 `setBridgeErrorReporter()` 注入的上报钩子上报（设计文档 §11.2），
-  bridge 本身不依赖 `@h5/monitor`；是否上报由 `@h5/core` 决定。
+- 失败上报口径：`0`（成功）、`1003`（用户取消）、`-2`（不在 App 内）**不上报**；
+  `1001`（方法不存在，旧版客户端信号）、`1002`、`1004`、`-1` 以及任何未识别的原生错误码**都上报**。
+  上报经 `setBridgeErrorReporter()` 注入的钩子完成（设计文档 §11.2），bridge 本身不依赖 `@h5/monitor`。
+- 该口径必须与 `@h5/monitor` 的 `reportBridgeError` 保持一致：指标由 monitor 侧产出，
+  两处若不同源，兼容性指标会被单边污染（`-2` 在无 mock 的浏览器/无桥 WebView 里每次都产生）。
 - 客户端新增错误码时必须同时更新本表；H5 会把未识别的码原样透出，不会吞掉。
 
 ## 4. 方法清单

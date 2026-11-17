@@ -167,6 +167,11 @@ export interface MockAdapter {
   network?: NetworkInfo
   /** 注入分享实现，默认 console.info。 */
   share?: (options: ShareOptions) => void
+  /**
+   * 打开后 mock 的 `share.open` 以 `1003`（用户取消）拒绝。
+   * 取消是协议里的一等结果（docs/bridge-protocol.md 错误码表），浏览器里必须能演练到。
+   */
+  cancelShare?: boolean
   /** 注入导航实现（如 vue-router push），默认 history.pushState。 */
   open?: (target: NavTarget) => void
   /** 逃生舱：为任意方法注入自定义实现（返回值即 data）。 */

@@ -12,7 +12,7 @@ export { app, auth, device, media, nav, share, storage, track, ui } from './api'
 export { canIUse } from './capabilities'
 export { isAvailable } from './channel'
 export { invoke, off, on } from './core'
-export { BridgeError, CODE, setBridgeErrorReporter } from './error'
+export { BridgeError, CODE, isReportableBridgeFailure, setBridgeErrorReporter } from './error'
 export { configureMock } from './mock'
 export {
   BRIDGE_VERSION,

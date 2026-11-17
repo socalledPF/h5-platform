@@ -29,10 +29,16 @@ const PACKAGES_DIR = join(WORKSPACE_ROOT, 'packages')
 /** 应用名会被当作目录名、vite appId、包名后缀，限制为小写短横线。 */
 const NAME_PATTERN = /^[a-z][a-z0-9-]{1,30}$/
 const DEFAULT_FROM = 'member'
-const EXCLUDED_DIRS = new Set(['node_modules', 'dist', 'coverage', '.turbo'])
-const EXCLUDED_SUFFIXES = ['.tsbuildinfo']
+const EXCLUDED_DIRS = new Set(['node_modules', 'dist', 'coverage', '.turbo', '.git'])
+const EXCLUDED_SUFFIXES = ['.tsbuildinfo', '.local']
+/** S3：纯本地 / 含密钥的文件不进新应用。.env.example 是文档化的占位符文件，必须保留。 */
+const EXCLUDED_FILES = new Set(['.DS_Store', '.env'])
+const ENV_FILE_PATTERN = /^\.env\./
+const KEPT_ENV_FILES = new Set(['.env.example'])
 /** 覆盖写入时最多列出多少个「将被覆盖」的文件，避免刷屏。 */
 const OVERWRITE_LIST_LIMIT = 10
+/** 只在这两类文件里改写 <title>：.svg 等文件里的 <title> 是图形标题，改了就是静默破坏。 */
+const HTML_EXTENSIONS = new Set(['.html', '.htm'])
 const TEXT_EXTENSIONS = new Set([
   '.ts',
   '.tsx',
@@ -71,8 +77,12 @@ const HELP = `create-app · 新建业务应用（设计方案 §4）
   --help, -h          显示本帮助
 
 做什么
-  1. 从 apps/<from> 复制骨架（排除 node_modules / dist / coverage / .turbo / *.tsbuildinfo）
+  1. 从 apps/<from> 复制骨架
+     排除目录：node_modules / dist / coverage / .turbo / .git
+     排除文件：*.tsbuildinfo / *.local / .DS_Store / .env / .env.*（例如 .env.local）
+     保留 .env.example：它是文档化的占位符文件，不涉及任何本地密钥
   2. 改写包名 @h5/app-<from> → @h5/app-<name>、vite appId、index.html 的 <title>
+     <title> 只在 .html / .htm 里改写；.svg 等文件里的 <title> 原样保留（那是图形标题）
   3. 打印后续需要人工完成的 5 步（路由 / base 路径 / 客户端入口 URL / 依赖边界 / pnpm install）
 
 覆盖已存在的应用
@@ -234,6 +244,17 @@ function isTextFile(filePath: string): boolean {
   return TEXT_EXTENSIONS.has(extension)
 }
 
+function isHtmlFile(filePath: string): boolean {
+  return HTML_EXTENSIONS.has(extname(filePath))
+}
+
+function isExcludedFile(name: string): boolean {
+  if (KEPT_ENV_FILES.has(name)) return false
+  if (EXCLUDED_FILES.has(name)) return true
+  if (ENV_FILE_PATTERN.test(name)) return true
+  return EXCLUDED_SUFFIXES.some((suffix) => name.endsWith(suffix))
+}
+
 function collectSkeletonFiles(root: string): string[] {
   const files: string[] = []
 
@@ -247,7 +268,7 @@ function collectSkeletonFiles(root: string): string[] {
         continue
       }
       if (!entry.isFile()) continue
-      if (EXCLUDED_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))) continue
+      if (isExcludedFile(entry.name)) continue
       files.push(full)
     }
   }
@@ -267,7 +288,11 @@ function replaceLiteral(
 }
 
 /** 文案替换规则：只作用于文本文件，逐条统计命中次数便于人工复核。 */
-function applyRules(content: string, context: RuleContext): { content: string; hits: RuleHit[] } {
+function applyRules(
+  content: string,
+  context: RuleContext,
+  rewriteTitle: boolean,
+): { content: string; hits: RuleHit[] } {
   const hits: RuleHit[] = []
   let output = content
 
@@ -295,17 +320,20 @@ function applyRules(content: string, context: RuleContext): { content: string; h
     count: appIdCount,
   })
 
-  const titlePattern = /<title>[\s\S]*?<\/title>/
-  const titleMatch = output.match(titlePattern)
-  const titleCount = titleMatch === null ? 0 : 1
-  if (titleMatch !== null) {
-    output = output.replace(titlePattern, `<title>${context.name}</title>`)
+  // S2：只改 .html/.htm 的 <title>。.svg 里的 <title> 是图形可访问名，被改名就是静默破坏。
+  if (rewriteTitle) {
+    const titlePattern = /<title>[\s\S]*?<\/title>/
+    const titleMatch = output.match(titlePattern)
+    const titleCount = titleMatch === null ? 0 : 1
+    if (titleMatch !== null) {
+      output = output.replace(titlePattern, `<title>${context.name}</title>`)
+    }
+    hits.push({
+      id: 'html-title',
+      description: `<title>…</title> → <title>${context.name}</title>（仅 .html/.htm）`,
+      count: titleCount,
+    })
   }
-  hits.push({
-    id: 'html-title',
-    description: `<title>…</title> → <title>${context.name}</title>`,
-    count: titleCount,
-  })
 
   return { content: output, hits }
 }
@@ -424,7 +452,7 @@ function buildPlan(
       continue
     }
 
-    const applied = applyRules(raw.toString('utf8'), context)
+    const applied = applyRules(raw.toString('utf8'), context, isHtmlFile(sourcePath))
     for (const hit of applied.hits) {
       const existing = totals.get(hit.id)
       if (existing === undefined) {
@@ -478,6 +506,9 @@ function printPlan(options: {
   console.log(`  骨架来源：apps/${options.from}`)
   console.log(`  写入目录：${relative(WORKSPACE_ROOT, options.targetDir) || '.'}`)
   console.log(`  排除规则：${[...EXCLUDED_DIRS].join(' / ')} / ${EXCLUDED_SUFFIXES.join(' / ')}`)
+  console.log(
+    `  排除文件：${[...EXCLUDED_FILES].join(' / ')} / .env.*（保留 ${[...KEPT_ENV_FILES].join(' / ')}）`,
+  )
   if (options.dryRun) console.log(`  模式：${yellow('--dry-run（不写文件）')}`)
 
   if (options.preExisted) {
@@ -505,7 +536,7 @@ function printPlan(options: {
   }
   console.log(`  ${dim('+ 原样复制    ~ 复制后做了文案替换')}`)
 
-  console.log(`\n${bold('文案替换（仅文本文件）')}`)
+  console.log(`\n${bold('文案替换（仅文本文件；<title> 只改 .html / .htm）')}`)
   for (const hit of hits) {
     const status = hit.count === 0 ? yellow('0 处（模板中未出现，可忽略）') : `${hit.count} 处`
     console.log(`  ${hit.id.padEnd(14)}${hit.description}  ${dim(status)}`)

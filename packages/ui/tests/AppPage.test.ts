@@ -24,6 +24,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.clearAllMocks()
+  document.documentElement.style.removeProperty('--safe-top')
+  document.documentElement.style.removeProperty('--safe-bottom')
 })
 
 describe('AppPage', () => {
@@ -55,6 +57,18 @@ describe('AppPage', () => {
     const wrapper = mount(AppPage, { props: { padded: false } })
 
     expect(styleOf(wrapper)).not.toContain('padding')
+  })
+
+  it('CSS 变量可用时不再注入 px 内边距（安全区只有一个真值）', () => {
+    document.documentElement.style.setProperty('--safe-top', '44px')
+    document.documentElement.style.setProperty('--safe-bottom', '34px')
+    navMode.value = 'none'
+
+    const style = styleOf(mount(AppPage))
+
+    expect(style).toContain('padding-top: var(--safe-top)')
+    expect(style).toContain('padding-bottom: var(--safe-bottom)')
+    expect(style).not.toMatch(/padding-(top|bottom): \d+px/)
   })
 
   it('background 覆盖背景色，滚动容器存在', () => {

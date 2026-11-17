@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { auth, BridgeError, CODE, invoke, setBridgeErrorReporter } from '../src/index'
-import { pendingCount } from '../src/core'
+import {
+  auth,
+  BridgeError,
+  CODE,
+  invoke,
+  isReportableBridgeFailure,
+  setBridgeErrorReporter,
+} from '../src/index'
+import { pendingCount, resetBridgeCore } from '../src/core'
+import { reportBridgeError } from '../src/error'
 import { installFakeAndroid, installFakeIos, resetBridgeState, respondFromNative } from './helpers'
 
 beforeEach(() => {
@@ -131,5 +139,87 @@ describe('invoke 协议', () => {
 
     expect(() => respondFromNative('cb_unknown_1', { code: 0, data: 'ignored' })).not.toThrow()
     expect(pendingCount()).toBe(0)
+  })
+})
+
+describe('失败上报口径（设计文档 11.2）', () => {
+  /** 必须上报：1001 是客户端兼容性信号，1002 / 1004 / -1 是真实失败。 */
+  const REPORTED: readonly number[] = [CODE.NOT_FOUND, CODE.BAD_PARAMS, CODE.DENIED, CODE.TIMEOUT]
+  /** 不上报：成功、用户取消、以及「不在 App 内」（运行环境事实，不是客户端问题）。 */
+  const UNREPORTED: readonly number[] = [CODE.OK, CODE.CANCELED, CODE.NOT_IN_APP]
+
+  it.each(REPORTED)('错误码 %i 上报', (code) => {
+    const reporter = vi.fn()
+    setBridgeErrorReporter(reporter)
+
+    reportBridgeError('share.open', code, 'boom')
+
+    expect(reporter).toHaveBeenCalledWith('share.open', code, 'boom')
+  })
+
+  it.each(UNREPORTED)('错误码 %i 不上报', (code) => {
+    const reporter = vi.fn()
+    setBridgeErrorReporter(reporter)
+
+    reportBridgeError('share.open', code, 'boom')
+
+    expect(reporter).not.toHaveBeenCalled()
+  })
+
+  it('原生新增的未识别码原样上报', () => {
+    const reporter = vi.fn()
+    setBridgeErrorReporter(reporter)
+
+    reportBridgeError('share.open', 1099, 'unknown code')
+
+    expect(reporter).toHaveBeenCalledWith('share.open', 1099, 'unknown code')
+  })
+
+  // 从包入口导入（而不是子模块）：monitor 只能走入口，深导入被仓库禁令挡住
+  it('入口导出的判定函数与上报口径同源，可直接供 monitor 过滤', () => {
+    for (const code of UNREPORTED) expect(isReportableBridgeFailure(code)).toBe(false)
+    for (const code of REPORTED) expect(isReportableBridgeFailure(code)).toBe(true)
+    // 未识别的原生新码按可上报处理
+    expect(isReportableBridgeFailure(-99)).toBe(true)
+  })
+
+  it('-2（没有原生通道）经 invoke 产生时也不上报', async () => {
+    const reporter = vi.fn()
+    setBridgeErrorReporter(reporter)
+
+    await expect(invoke('device.vibrate')).rejects.toMatchObject({ code: CODE.NOT_IN_APP })
+
+    expect(reporter).not.toHaveBeenCalled()
+  })
+})
+
+describe('resetBridgeCore 的结算语义', () => {
+  it('reset 时把挂起调用以 -2 拒绝，不留悬空 Promise 与计时器', async () => {
+    const reporter = vi.fn()
+    setBridgeErrorReporter(reporter)
+    vi.useFakeTimers()
+    installFakeAndroid(() => {
+      // 原生永不回调：reset 时这两个调用仍挂在 pending 里
+    })
+
+    const first = invoke('device.getLocation')
+    const second = invoke('auth.getToken')
+    expect(pendingCount()).toBe(2)
+
+    resetBridgeCore()
+
+    await expect(first).rejects.toMatchObject({
+      code: CODE.NOT_IN_APP,
+      method: 'device.getLocation',
+      message: 'bridge reset',
+    })
+    await expect(second).rejects.toMatchObject({
+      code: CODE.NOT_IN_APP,
+      method: 'auth.getToken',
+    })
+    expect(pendingCount()).toBe(0)
+    expect(vi.getTimerCount()).toBe(0)
+    // reset 是测试 / 环境重建，不是客户端失败，不得计入 11.2 指标
+    expect(reporter).not.toHaveBeenCalled()
   })
 })

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { app, canIUse, CODE, setBridgeErrorReporter } from '../src/index'
+import type { BridgeMethod } from '../src/index'
 import { cachedCapabilityList, loadCapabilities, resetCapabilities } from '../src/capabilities'
 import { configureMock } from '../src/mock'
 import { METHODS } from '../src/protocol'
@@ -65,7 +66,8 @@ describe('能力探测载荷防御（设计文档 13.2）', () => {
     await loadCapabilities()
     expect(cachedCapabilityList()).toBeNull()
 
-    expect(canIUse('share.deepLink')).toBe(true)
+    // 参数已收窄为 BridgeMethod，这里用真实方法名验证「能力未知 → 乐观 true」的语义
+    expect(canIUse(METHODS.device.scan)).toBe(true)
     expect(canIUse('media.chooseImage')).toBe(true)
   })
 
@@ -149,7 +151,8 @@ describe('合法能力列表的缓存语义', () => {
     await expect(loadCapabilities()).resolves.toEqual(['share.open', 'auth.getToken'])
     expect(canIUse('share.open')).toBe(true)
     expect(canIUse('auth.getToken')).toBe(true)
-    expect(canIUse('share')).toBe(false)
+    // 运行期仍是精确匹配（不按前缀）：'share' 不是方法名，故为 false；类型层已收窄，故需断言
+    expect(canIUse('share' as BridgeMethod)).toBe(false)
     expect(canIUse('media.chooseImage')).toBe(false)
 
     await loadCapabilities()

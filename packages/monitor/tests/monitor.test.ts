@@ -1,4 +1,4 @@
-import { configureMock } from '@h5/bridge'
+import { CODE, configureMock, isReportableBridgeFailure } from '@h5/bridge'
 import { useAuthStore } from '@h5/core'
 import type { App } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -101,7 +101,7 @@ describe('initMonitor（设计文档 11.2）', () => {
     expect(collectedRecords()).toHaveLength(0)
   })
 
-  it('公共字段齐全（appId / 版本 / 系统 / 机型 / 网络 / 路由 / 脱敏 uid）', () => {
+  it('公共字段齐全（appId / 版本 / 系统 / 机型 / 网络 / 路由 / 会话级假名 uid）', () => {
     useAuthStore().setToken('abcdefgh')
     initDefault()
 
@@ -114,10 +114,12 @@ describe('initMonitor（设计文档 11.2）', () => {
       os: 'ios 16.3',
       device: 'iPhone 14',
       route: '/member/order?id=1',
-      uid: 'ab***gh',
+      uidSource: 'token-hash',
       message: 'boom',
       extra: 1,
     })
+    // uid 不再是 token 片段，而是定长、不可逆的会话级假名
+    expect(payload.uid).toBe('u_76daaa8d')
     // 未注入 __APP_VERSION__ 时降级，而不是静默上报一个假版本
     expect(payload.h5Version).toBe('0.0.0')
     expect(typeof payload.network).toBe('string')
@@ -287,28 +289,57 @@ describe('采样（设计文档 11.2：错误全量、性能 10%–20%）', () =
 })
 
 describe('Bridge 失败上报（设计文档 11.2）', () => {
-  it('用户取消（1003）与成功（0）不上报', () => {
-    initDefault()
+  it.each([
+    { label: '成功（0）', code: 0 },
+    { label: '用户取消（1003）', code: 1003 },
+    { label: '不在 App 内（-2）', code: -2 },
+  ])('不上报、也不进 Sentry：$label', async ({ code }) => {
+    initMonitor({ appId: 'member', env: testEnv, dsn: 'https://key@sentry.example.com/1' })
+    await vi.waitFor(() => {
+      expect(isSentryReady()).toBe(true)
+    })
+    sentryCaptureMock.mockClear()
 
-    reportBridgeError('share.open', 1003, 'canceled')
-    reportBridgeError('share.open', 0, 'ok')
+    reportBridgeError('share.open', code, 'not a failure')
 
     expect(collectedRecords()).toHaveLength(0)
+    expect(sentryCaptureMock).not.toHaveBeenCalled()
   })
 
-  it('方法不存在（1001）记录方法名与错误码', () => {
+  it.each([1001, 1002, 1004, -1, 1099])('上报失败码 %i：记录 method / code / msg', (code) => {
     initDefault()
 
-    reportBridgeError('device.scan', 1001, 'not found')
+    reportBridgeError('device.scan', code, 'boom')
 
     const records = collectedRecords()
     expect(records).toHaveLength(1)
     expect(records[0]).toMatchObject({ kind: 'bridge', name: 'device.scan' })
-    expect(records[0].payload).toMatchObject({
-      method: 'device.scan',
-      code: 1001,
-      msg: 'not found',
-    })
+    expect(records[0].payload).toMatchObject({ method: 'device.scan', code, msg: 'boom' })
+  })
+
+  it('bridge 的判定与 monitor 的上报行为逐码一致（同一份实现，无需内部符号）', () => {
+    const codes = [0, 1003, -2, 1001, 1002, 1004, -1, 1099]
+    const reported: number[] = []
+    for (const code of codes) {
+      resetMonitor()
+      initDefault()
+      reportBridgeError('device.scan', code, 'boom')
+      if (collectedRecords().length > 0) reported.push(code)
+    }
+
+    // 判定说“不报”的码，reportBridgeError 就一定不产生记录；反之亦然
+    expect(reported).toEqual(codes.filter((code) => isReportableBridgeFailure(code)))
+    // 再把排除集显式钉死：bridge 侧哪天把 -2 放回来，这里立刻变红
+    expect(reported).toEqual([1001, 1002, 1004, -1, 1099])
+    expect(CODE.NOT_IN_APP).toBe(-2)
+  })
+
+  it('监控关闭时 Bridge 失败静默', () => {
+    initDefault({ enabled: false })
+
+    reportBridgeError('device.scan', 1001, 'boom')
+
+    expect(collectedRecords()).toHaveLength(0)
   })
 })
 
@@ -592,7 +623,8 @@ describe('资源与兜底分支', () => {
     initDefault()
     useAuthStore().setToken('ab')
     captureError(new Error('short token'))
-    expect(recordsOf('error')[0].uid).toBe('***')
+    // 短 token 同样走哈希：不再出现 '***' 这种“看起来脱敏、实际按长度泄露”的分支
+    expect(recordsOf('error')[0].uid).toBe('u_4d2505ca')
 
     const circular: Record<string, unknown> = {}
     circular.self = circular
@@ -664,5 +696,75 @@ describe('错误缓冲', () => {
     expect(entries).toHaveLength(10)
     expect(entries.at(-1)).toBe('last')
     expect(entries).not.toContain('err-0')
+  })
+})
+
+describe('uid：会话级假名（M1 修复：不再上报 token 片段）', () => {
+  // 真实 JWT 形状的 token：哈希已实测不含其任何 2 字符片段。
+  const TOKEN_A = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1LTQyIn0.sig_7dQ4w9WgXcQ'
+  const TOKEN_B = 'token-beta-2'
+
+  function uidWithToken(token: string): string {
+    resetMonitor()
+    initDefault()
+    useAuthStore().setToken(token)
+    captureError(new Error('boom'))
+    return String(recordsOf('error')[0].uid)
+  }
+
+  it('同一 token 恒定：同一用户的多次上报落在同一个 uid 上', () => {
+    expect(uidWithToken(TOKEN_A)).toBe(uidWithToken(TOKEN_A))
+    // 取值定死：算法若变动会让线上用户整体重新分桶，必须显式改测试
+    expect(uidWithToken(TOKEN_A)).toBe('u_8229f1ff')
+  })
+
+  it('不同 token（含 token 刷新）产生不同假名', () => {
+    expect(uidWithToken(TOKEN_A)).not.toBe(uidWithToken(TOKEN_B))
+  })
+
+  it('整条上报里不含 token 的任何 ≥2 字符片段', () => {
+    initDefault()
+    useAuthStore().setToken(TOKEN_A)
+
+    captureError(new Error('boom'))
+    trackEvent('click', { from: 'home' })
+    reportPerf('render', 10)
+    reportBridgeError('share.open', 1001, 'not found')
+
+    const payloads = collectedRecords().map((entry) => entry.payload)
+    const full = JSON.stringify(payloads)
+
+    // 整条 payload（含 stack、路由、版本号等原文）：token 的 ≥4 字符片段一旦出现就是泄露。
+    for (let index = 0; index + 4 <= TOKEN_A.length; index += 1) {
+      expect(full).not.toContain(TOKEN_A.slice(index, index + 4))
+    }
+
+    // 2 字符口径：token 唯一可能流入的地方是 uid / uidSource。其余字段是业务与环境字面量
+    // （"0.0.0"、"ios 16.3" 之类），本身就可能含有 token 的某个 2 字符组合，对它们断言只会
+    // 随机变红，反而掩护真正的泄露点。
+    for (const payload of payloads) {
+      const derived = JSON.stringify({ uid: payload.uid, uidSource: payload.uidSource })
+      for (let index = 0; index + 2 <= TOKEN_A.length; index += 1) {
+        expect(derived).not.toContain(TOKEN_A.slice(index, index + 2))
+      }
+      // 非空校验放在最后：先让“含 token 片段”这件事自己变红，而不是被形状断言顺手盖住
+      expect(derived).toContain('u_')
+    }
+  })
+
+  it('没有 token 时为 anon，且 uidSource 标为 anon', () => {
+    initDefault()
+
+    captureError(new Error('boom'))
+
+    const payload = recordsOf('error')[0]
+    expect(payload.uid).toBe('anon')
+    expect(payload.uidSource).toBe('anon')
+  })
+
+  it('假名定长：u_ + 8 位十六进制，与 token 长度无关', () => {
+    for (const token of ['a', 'ab', TOKEN_A, 'x'.repeat(2_048)]) {
+      expect(uidWithToken(token)).toMatch(/^u_[0-9a-f]{8}$/)
+    }
   })
 })

@@ -9,6 +9,7 @@ import {
   METHOD_LIST,
   media,
   nav,
+  on,
   setBridgeErrorReporter,
   share,
   storage,
@@ -189,15 +190,73 @@ describe('浏览器 mock', () => {
     await expect(invoke('custom.echo', { key: 'k' })).resolves.toEqual({ echo: 'k' })
   })
 
-  it('默认网络信息按 navigator 推断', async () => {
+  it('默认网络信息把 navigator.connection.effectiveType 映射成协议网络类型', async () => {
     configureMock({})
-    await expect(device.getNetwork()).resolves.toEqual({ type: 'unknown' })
 
-    setNavigatorProperty('connection', { effectiveType: '4g' })
-    await expect(device.getNetwork()).resolves.toEqual({ type: 'unknown', effectiveType: '4g' })
+    // 在线但拿不到 connection（如 iOS Safari）：浏览器无法区分 wifi / 蜂窝，按近似值 wifi 返回
+    await expect(device.getNetwork()).resolves.toEqual({ type: 'wifi' })
+
+    const table: ReadonlyArray<readonly [string, string]> = [
+      ['slow-2g', '2g'],
+      ['2g', '2g'],
+      ['3g', '3g'],
+      ['4g', '4g'],
+      ['5g', '5g'],
+    ]
+    for (const [effectiveType, type] of table) {
+      setNavigatorProperty('connection', { effectiveType })
+      await expect(device.getNetwork()).resolves.toEqual({ type, effectiveType })
+    }
+
+    // 无法识别的档位退回近似值，不再一律报 'unknown'
+    setNavigatorProperty('connection', { effectiveType: 'ethernet' })
+    await expect(device.getNetwork()).resolves.toEqual({ type: 'wifi' })
 
     setNavigatorProperty('onLine', false)
     await expect(device.getNetwork()).resolves.toEqual({ type: 'none' })
+  })
+
+  it('mock 登录 / 登出推送 auth.change：登录带 token，登出带 null', async () => {
+    configureMock({})
+    const received: Array<{ token: string | null }> = []
+    on('auth.change', (data) => received.push(data))
+
+    await auth.login()
+    expect(received).toHaveLength(1)
+    const token = received[0]?.token
+    expect(typeof token).toBe('string')
+    // 登录后的 token 必须能被 auth.getToken 读到，登录闭环才算跑通
+    await expect(auth.getToken()).resolves.toMatchObject({ token })
+
+    await auth.logout()
+    expect(received).toHaveLength(2)
+    expect(received[1]).toEqual({ token: null })
+    await expect(auth.getToken()).resolves.toMatchObject({ token: 'mock-token' })
+  })
+
+  it('两次登录拿到不同 token，换账号分支可在浏览器里演练', async () => {
+    configureMock({})
+    const tokens: Array<string | null> = []
+    on('auth.change', (data) => tokens.push(data.token))
+
+    await auth.login()
+    await auth.logout()
+    await auth.login()
+
+    expect(tokens).toHaveLength(3)
+    expect(tokens[0]).not.toBe(tokens[2])
+  })
+
+  it('cancelShare 开启时 share.open 以 1003 拒绝，且不上报监控', async () => {
+    const reporter = vi.fn()
+    setBridgeErrorReporter(reporter)
+    configureMock({ cancelShare: true })
+
+    await expect(share.open({ link: 'https://h5.example.com/member' })).rejects.toMatchObject({
+      code: CODE.CANCELED,
+      method: 'share.open',
+    })
+    expect(reporter).not.toHaveBeenCalled()
   })
 
   it('未开启 mock 时仍走原生分支（不在 App 内以 -2 拒绝）', async () => {

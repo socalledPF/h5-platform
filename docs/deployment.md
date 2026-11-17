@@ -129,7 +129,7 @@ App 的测试包提供环境切换开关，把 `h5.xxx.com` 映射到 test/pre �
 
 ## 6. 发布流程 5 步（§9.4）
 
-`scripts/deploy.ts` 把 5 步全部打印出来，并校验前置条件；只有第 1 步能真正执行（需要 `--execute --yes` + `UPLOAD_CMD`），其余步骤由人工或 CI 完成。
+`scripts/deploy.ts` 把 5 步全部打印出来，并校验前置条件（含**工作区是否干净**与**产物是否早于 HEAD 提交**，dry-run 也会执行）；只有第 1 步能真正执行（需要 `--execute --yes` + `UPLOAD_CMD`），其余步骤由人工或 CI 完成。
 
 | 步骤 | 做什么                                                      | 脚本是否执行                          |
 | ---- | ----------------------------------------------------------- | ------------------------------------- |
@@ -206,7 +206,7 @@ nginx -t && nginx -s reload
 ## 11. `scripts/deploy.ts` 用法
 
 ```text
-pnpm deploy --app <name> [--version <v>] [--env dev|test|pre|prod] [--execute] [--yes] [--help]
+pnpm deploy --app <name> [--version <v>] [--env dev|test|pre|prod] [--execute] [--yes] [--allow-dirty] [--allow-stale] [--help]
 pnpm deploy <name>            # 应用名也可以作为第一个位置参数
 ```
 
@@ -217,6 +217,8 @@ pnpm deploy <name>            # 应用名也可以作为第一个位置参数
 | `--env <env>`   | `dev` / `test` / `pre` / `prod`，**默认 `test`**；发 `prod` 必须显式写 `--env prod`，非 prod 会切换域名并醒目告警 |
 | `--execute`     | 真正执行上传，默认 dry-run 什么都不做                                                                             |
 | `--yes`         | 与 `--execute` 联用，二次确认上传不可撤销                                                                         |
+| `--allow-dirty` | 跳过「工作区干净」校验。默认拒绝：有未提交改动时无法证明产物就是这个 commit 构建的（未跟踪文件也算脏）            |
+| `--allow-stale` | 跳过「dist 不早于 HEAD 提交」校验。默认拒绝：先构建再发布                                                         |
 | `--help`        | 打印帮助                                                                                                          |
 
 dry-run 会打印：解析结果（应用 / 版本 / commit / 发布标识 / 环境 / CDN 目录 / 入口与版本化 HTML）、产物校验、缓存头策略、发布 5 步、回滚指令、发布记录模板。
@@ -227,6 +229,11 @@ dry-run 会打印：解析结果（应用 / 版本 / commit / 发布标识 / 环
 - `dist` 中没有 `*.map` 残留
 - `--env`、`--version` 取值合法
 - `--execute` 必须搭配 `--yes`
+- **工作区干净**（`git status --porcelain` 为空，未跟踪文件也算脏）；否则用 `--allow-dirty`
+- **产物不早于 HEAD 提交**（`dist` 内最新 mtime vs `git log -1`）；否则先 `pnpm --filter <pkg> build`，或 `--allow-stale`
+
+> 最后两项在 dry-run 阶段同样执行——它们的作用是防止「昨天构建、今天提交、上传旧包贴新版本号」。
+> 时间粒度是整秒：构建与提交落在同一秒时会被判定为新鲜（最多 1 秒盲区）。
 
 ### `UPLOAD_CMD` 配置示例
 
@@ -254,7 +261,11 @@ export UPLOAD_CMD="h5-cli upload --dir {src} --base {dest}"
 
 ## 12. 发布前检查清单
 
+> `--allow-dirty` / `--allow-stale` 仅为应急通道：绕过它们意味着放弃「产物与 commit 一一对应」这一前提，
+> 事后按版本比对错误率、以及回滚定位都会失去依据。
+
 - [ ] `pnpm typecheck && pnpm lint && pnpm lint:style && pnpm test && pnpm build` 全绿
+- [ ] 工作区干净（已提交），且 `dist` 由当前 commit 构建（`deploy` 会校验，勿用 `--allow-*` 绕过）
 - [ ] `dist` 内没有 `*.map` 残留，sourcemap 已传监控平台
 - [ ] `UPLOAD_CMD` 的 `{dest}` 是**新版本目录**，不会覆盖旧文件
 - [ ] test 环境用双端测试包各走一遍关键流程（打开、登录态、导航返回、分享）
