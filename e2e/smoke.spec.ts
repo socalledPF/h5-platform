@@ -4,7 +4,7 @@ import { expect, test } from '@playwright/test'
  * 冒烟 E2E（设计文档 7.1 / 7.5）。
  *
  * 跑在 `createH5App` 的浏览器 mock 上。`playwright.config.ts` 同时启动两个 dev server：
- * member（baseURL 127.0.0.1:5173）与独立入口的 activity（127.0.0.1:5174），
+ * member（baseURL 127.0.0.1:5273）与独立入口的 activity（127.0.0.1:5274），
  * 因此下面的 activity 用例不再探测、不再跳过——活动页必须真的被跑过。
  *
  * 约定：只用 role / test-id 定位，断言等待交给 Playwright 的自动重试，不写 waitForTimeout。
@@ -51,7 +51,7 @@ test.describe('沉浸式（nav=none）', () => {
 })
 
 /** activity 是独立入口，由 `playwright.config.ts` 的第二个 webServer 启动。 */
-const ACTIVITY_BASE_URL = process.env.E2E_ACTIVITY_BASE_URL ?? 'http://127.0.0.1:5174'
+const ACTIVITY_BASE_URL = process.env.E2E_ACTIVITY_BASE_URL ?? 'http://127.0.0.1:5274'
 
 test.describe('activity 活动页（独立入口）', () => {
   test('沉浸式头部渲染，且没有 H5 导航栏', async ({ page }) => {

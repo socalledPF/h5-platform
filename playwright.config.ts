@@ -1,17 +1,28 @@
 import { defineConfig, devices } from '@playwright/test'
 
-const MEMBER_PORT = 5173
-const ACTIVITY_PORT = 5174
+const MEMBER_PORT = 5273
+const ACTIVITY_PORT = 5274
 
-/** member 是 e2e 的主入口，作为 baseURL。 */
+/**
+ * member 是 e2e 的主入口，作为 baseURL。
+ *
+ * 端口刻意避开 5173/5174：那是各 app 日常 `pnpm dev` 的默认端口，很容易被本机其它项目占着。
+ * 若复用已占用端口，Playwright 会静默连上**别人家的应用**，测试绿/红都失去意义（真实踩过）。
+ */
 const MEMBER_BASE_URL = `http://127.0.0.1:${MEMBER_PORT}`
 /** activity 是独立入口的应用：必须一起起来，否则活动页用例会被跳过，等于没测。 */
 const ACTIVITY_BASE_URL = `http://127.0.0.1:${ACTIVITY_PORT}`
 
 /**
- * 浏览器渠道兜底：Playwright 1.65 已不支持在 macOS 12 上安装自带 chromium，
- * 本机可用 `PLAYWRIGHT_CHANNEL=chrome pnpm e2e` 复用系统 Chrome 跑同一套用例。
- * CI 不设该变量，仍然使用 Playwright 自带的 chromium，门禁强度不变。
+ * 浏览器渠道兜底（可选，默认不需要）。
+ *
+ * 版本选择：`@playwright/test` 固定在 1.61.x —— 1.60/1.61 自带的 chromium（1223/1228）
+ * 二进制最低要求 macOS 12.0，因此 macOS 12 的机器也能装、也能跑；1.62 起 Playwright
+ * 不再为 macOS 12 发布 chromium 产物（安装直接报 "does not support chromium on mac12"）。
+ * 也就是说本地与 CI 用的是**同一个**自带浏览器，不存在"本地系统 Chrome、CI 自带 chromium"的差异。
+ *
+ * 若某台机器仍要复用系统浏览器（例如自带 chromium 下载受限），可用
+ * `PLAYWRIGHT_CHANNEL=chrome pnpm e2e` 显式切换；CI 不设该变量。
  */
 const CHANNEL = process.env.PLAYWRIGHT_CHANNEL
 const channel =
@@ -38,13 +49,13 @@ export default defineConfig({
     {
       command: `pnpm --filter @h5/app-member exec vite --port ${MEMBER_PORT} --strictPort`,
       url: MEMBER_BASE_URL,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 120_000,
     },
     {
       command: `pnpm --filter @h5/app-activity exec vite --port ${ACTIVITY_PORT} --strictPort`,
       url: ACTIVITY_BASE_URL,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 120_000,
     },
   ],

@@ -10,6 +10,21 @@ pnpm dev                                # 所有应用
 pnpm --filter @h5/app-member dev        # 只起一个应用，默认 http://localhost:5173
 ```
 
+### e2e 与 Playwright 版本约束
+
+```bash
+pnpm e2e     # 自动起 member(5273) 与 activity(5274) 两个 dev server，跑 e2e/smoke.spec.ts
+```
+
+- **端口是专用端口 5273 / 5274**，且 `reuseExistingServer: false`：日常 `pnpm dev` 占着 5173/5174 时不会误连，
+  端口被占会直接报错而不是静默测试别的应用（本项目真实踩过：本地 e2e 连上了另一个项目的 dev server）。
+- **`@playwright/test` 固定在 1.61.x，不要随手升级**：1.60/1.61 自带的 chromium（1223/1228）二进制最低要求
+  macOS 12.0，macOS 12 的机器也能装能跑；**1.62 起 Playwright 不再为 macOS 12 发布 chromium 产物**，
+  `playwright install chromium` 会直接报 `does not support chromium on mac12`。
+  要升级前请先确认团队不再有 macOS 12 的机器，或接受本地只能用 `PLAYWRIGHT_CHANNEL=chrome` 复用系统浏览器
+  （CI 不受影响，它在 ubuntu 上装自带 chromium）。
+- 首次在干净机器上跑需要 `pnpm exec playwright install chromium`；CI 里由 e2e job 自动完成。
+
 ### 浏览器 mock 模式的原理
 
 日常开发**不需要 App、不需要真机**：`@h5/bridge` 内置 mock 层。核心判断是 `env.isApp`——启动时 `bridge.ready()` 探测 `window.webkit.messageHandlers.H5Bridge`（iOS）与 `window.H5Bridge.postMessage`（Android）是否存在：
