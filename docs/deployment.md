@@ -146,13 +146,13 @@ App 的测试包提供环境切换开关，把 `h5.xxx.com` 映射到 test/pre �
 pnpm --filter @h5/app-member build
 
 # 2) 看计划：解析 + 校验 + 缓存头 + 5 步（默认 dry-run，不上传）
-pnpm deploy --app member
+pnpm run deploy --app member
 
 # 3) 预发环境演练
-pnpm deploy --app member --env pre --version 0.2.0
+pnpm run deploy --app member --env pre --version 0.2.0
 
 # 4) 真正上传第 1 步（不可撤销，必须两次确认）
-UPLOAD_CMD="rsync -av {src} {dest}" pnpm deploy --app member --env prod --execute --yes
+UPLOAD_CMD="rsync -av {src} {dest}" pnpm run deploy --app member --env prod --execute --yes
 ```
 
 ## 7. 回滚流程
@@ -206,8 +206,8 @@ nginx -t && nginx -s reload
 ## 11. `scripts/deploy.ts` 用法
 
 ```text
-pnpm deploy --app <name> [--version <v>] [--env dev|test|pre|prod] [--execute] [--yes] [--allow-dirty] [--allow-stale] [--help]
-pnpm deploy <name>            # 应用名也可以作为第一个位置参数
+pnpm run deploy --app <name> [--version <v>] [--env dev|test|pre|prod] [--execute] [--yes] [--allow-dirty] [--allow-stale] [--help]
+pnpm run deploy <name>            # 应用名也可以作为第一个位置参数
 ```
 
 | 参数            | 说明                                                                                                              |

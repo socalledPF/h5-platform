@@ -27,9 +27,14 @@ const LOCAL_DATE_TIME_RE = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2
 /** 末尾带 `Z` 或 `±HH:MM`：这类串按 ISO 交给引擎，绝不能改动它的连字符。 */
 const ZONED_RE = /(?:[Zz]|[+-]\d{2}:?\d{2})$/
 
+/** 时分秒的合法上界：`new Date` 会把越界值静默进位，必须自己挡掉。 */
+const MAX_HOUR = 23
+const MAX_MINUTE = 59
+const MAX_SECOND = 59
+
 /**
  * 用年月日时分秒构造本地时间。
- * 日期越界（如 `2026-02-30`）返回 `null`，不让 `Date` 的自动进位把非法值蒙混成合法值。
+ * 日期或时分秒越界返回 `null`，不让 `Date` 的自动进位把非法值蒙混成合法值。
  */
 function localTime(
   year: number,
@@ -39,6 +44,11 @@ function localTime(
   minute = 0,
   second = 0,
 ): number | null {
+  // 时分秒越界必须先拒绝：`new Date(2026, 10, 13, 10, 75)` 会被引擎进位成 11:15:00，
+  // 于是一个非法输入换来一个「看起来正常却错」的结束时间——而同样非法的 `23:70` 因为跨天
+  // 被下面的同日校验拦下，返回 null。同类输入两种行为，正是这里要消灭的不一致。
+  if (hour > MAX_HOUR || minute > MAX_MINUTE || second > MAX_SECOND) return null
+
   const date = new Date(year, month - 1, day, hour, minute, second)
   const sameDay =
     date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day

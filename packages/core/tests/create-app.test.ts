@@ -317,6 +317,42 @@ describe('落地路由同步（设计文档 7.2：首屏必须同步 title / nav
     expect(setTitle).toHaveBeenLastCalledWith('我的订单')
     expect(routeStackDepth.value).toBe(2)
   })
+
+  it('全局 beforeEach 永不结算时启动不挂死，白屏检测仍然装上', async () => {
+    vi.useFakeTimers()
+    const monitor = createMonitorSpy()
+    const router = createRouter({
+      history: createWebHistory(),
+      routes: [{ path: '/', component: Page }],
+    })
+    // 线上形态：全局守卫里 await 原生登录 / 远端配置，那个 Promise 一直不结算
+    router.beforeEach(() => new Promise<boolean>(() => undefined))
+
+    let resolved = false
+    const pending = createH5App(EmptyRoot, {
+      appId: 'member',
+      router,
+      monitor,
+      firstScreenSelector: '#app',
+    }).then((app) => {
+      resolved = true
+      return app
+    })
+
+    // 没有上限时这里永远不会 resolve：下面的断言就是回归点
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(resolved).toBe(true)
+
+    const app = await pending
+    app.mount(prepareDocument())
+
+    // 白屏检测排在落地同步之后：挂死时它根本没被排上，白屏连遥测都没有
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(monitor.captureError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ source: 'white-screen', selector: '#app' }),
+    )
+  })
 })
 
 describe('白屏检测（设计文档 11.2）', () => {
@@ -557,5 +593,57 @@ describe('原生载荷异常时的启动韧性', () => {
     } finally {
       delete bridgeWindow.H5Bridge
     }
+  })
+})
+
+describe('启动期 Bridge 失败上报（设计文档 11.2：兼容性指标不能漏掉最老客户端）', () => {
+  function installOldAppChannel(): () => void {
+    const bridgeWindow = window as unknown as {
+      H5Bridge?: { postMessage: (payload: string) => void }
+      __H5Bridge?: { callback?: (id: string, result: unknown) => void }
+    }
+    bridgeWindow.H5Bridge = {
+      postMessage(payload: string): void {
+        const message = JSON.parse(payload) as { callbackId: string }
+        // 老版本 App 没有任何新方法：一律答 1001（方法不存在）
+        bridgeWindow.__H5Bridge?.callback?.(message.callbackId, {
+          code: 1001,
+          msg: 'method not found',
+        })
+      },
+    }
+    return () => {
+      delete bridgeWindow.H5Bridge
+    }
+  }
+
+  it('app.getInfo 答 1001 时上报器已就位，第一次 Bridge 调用不被丢弃', async () => {
+    resetMock()
+    vi.stubEnv('VITE_APP_ENV', 'prod')
+    const monitor = createMonitorSpy()
+    const removeChannel = installOldAppChannel()
+
+    try {
+      const app = await createH5App(Root, {
+        appId: 'member',
+        router: createTestRouter(),
+        monitor,
+      })
+
+      expect(monitor.reportBridgeError).toHaveBeenCalledWith('app.getInfo', 1001, expect.anything())
+      expect(typeof app.mount).toBe('function')
+    } finally {
+      removeChannel()
+    }
+  })
+
+  it('二次启动未注入监控时不继承上一轮的 reporter', async () => {
+    const stale = createMonitorSpy()
+    await createH5App(Root, { appId: 'member', router: createTestRouter(), monitor: stale })
+
+    await createH5App(Root, { appId: 'member', router: createTestRouter() })
+    await expect(invoke('unknown.method')).rejects.toMatchObject({ code: 1001 })
+
+    expect(stale.reportBridgeError).not.toHaveBeenCalled()
   })
 })

@@ -131,10 +131,13 @@ function join(): void {
     <div class="activity__spacer" aria-hidden="true"></div>
 
     <!-- 底部固定 CTA：把内容垫到 home indicator 之上（设计文档 8.2） -->
+    <!-- `inert` 取值用 `|| undefined`：它不在 Vue 的 specialBooleanAttrs 里，传 false 会渲染成
+         inert="false"（属性存在即生效），只有 undefined 才会把属性删掉 -->
     <footer
       class="activity__cta"
       :class="{ 'activity__cta--hidden': keyboardVisible }"
       :aria-hidden="keyboardVisible"
+      :inert="keyboardVisible || undefined"
       data-testid="activity-cta"
     >
       <van-button type="danger" block round data-testid="activity-join" @click="join">
@@ -313,10 +316,22 @@ function join(): void {
     opacity 0.2s ease;
 }
 
-/* 键盘弹起期间藏起底部固定栏（设计文档 8.3）：只位移 + 透明，占位仍由 .activity__spacer 保留 */
+/* 键盘弹起期间藏起底部固定栏（设计文档 8.3）：只位移 + 透明，占位仍由 .activity__spacer 保留。
+ *
+ * 真正的「失效」交给两条互不依赖的机制，缺一条都会留下 aria-hidden 里可被 Tab 聚焦、
+ * 回车还能触发的按钮：
+ * - 模板上的 inert：Chrome 102 / iOS 15.5 起才有，给新内核。
+ * - 这里的 visibility: hidden：最低目标 Android 8 / iOS 12 没有 inert 属性，只有它能把这些
+ *   WebView 里的 CTA 从 Tab 序列中摘掉，所以必须保留。
+ * visibility 是离散属性，用 0s 延迟 0.2s 过渡：等淡出动画走完再变 hidden，视觉过渡不受影响。 */
 .activity__cta--hidden {
   pointer-events: none;
+  visibility: hidden;
   opacity: 0;
   transform: translateY(100%);
+  transition:
+    transform 0.2s ease,
+    opacity 0.2s ease,
+    visibility 0s linear 0.2s;
 }
 </style>

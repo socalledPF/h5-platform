@@ -1,11 +1,28 @@
 import { createApp, defineComponent, h } from 'vue'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import { parseTime, useCountdown } from '../src/composables/useCountdown'
+/**
+ * 时区先钉死再看被测模块：`process.env.TZ` 的赋值会触发 Node 的 tzset，之后创建的 Date
+ * 才按新时区走（Node 按进程缓存 TZ，晚于任何一次 Date 运算再改就不再生效）。
+ * 静态 import 会被提升到文件顶部执行，所以被测模块用动态 import，保证「设 TZ → 加载模块」的顺序。
+ *
+ * 钉死时区是为了让本文件在任何机器上都断得出同样的绝对时间戳：放任 CI 跑在 UTC 上时，
+ * 「本地零点」与「UTC 零点」恰好相等，那条断言就空转了。
+ *
+ * `process` 只声明用到的那一处：测试工程继承的 tsconfig 是 `types: []`（不带 node 类型）。
+ */
+declare const process: { env: Record<string, string | undefined> }
+
+process.env.TZ = 'Asia/Shanghai'
+
+const { parseTime, useCountdown } = await import('../src/composables/useCountdown')
 import type { UseCountdownReturn } from '../src/composables/useCountdown'
 
-/** 2026-11-13 的本地零点：`YYYY-MM-DD` 的期望语义。 */
-const LOCAL_MIDNIGHT = new Date(2026, 10, 13).getTime()
+/**
+ * 2026-11-13 在 Asia/Shanghai（UTC+8）的本地零点，写成绝对时间戳。
+ * 硬编码而不是 `new Date(2026, 10, 13)`：期望值不能跟着被测代码和机器时区一起飘。
+ */
+const LOCAL_MIDNIGHT = Date.UTC(2026, 10, 12, 16)
 /** 2026-11-13 的 UTC 零点：ISO 串的语义，`YYYY-MM-DD` 绝不能解析成这个值。 */
 const UTC_MIDNIGHT = Date.UTC(2026, 10, 13)
 /** `2026-11-13 10:00:00-05:00` 对应的绝对时刻。 */
@@ -44,12 +61,19 @@ function mountCountdown(endAt: string | undefined): Mounted {
 
 describe('parseTime 时间解析', () => {
   it('只有日期时按本地零点解析，而不是 UTC 零点', () => {
+    // 无条件断言绝对时间戳：本文件把 TZ 钉在 Asia/Shanghai，两种时区语义不再可能相等
     expect(parseTime('2026-11-13')).toBe(LOCAL_MIDNIGHT)
-    // 非 UTC 时区下两者必然相差一个时区偏移；旧实现让引擎解析 '2026/11/13'，
-    // 本机恰好落在本地零点，但在别的引擎上会漂——这里断言的是数值，不是本地化字符串。
-    if (new Date(2026, 10, 13).getTimezoneOffset() !== 0) {
-      expect(parseTime('2026-11-13')).not.toBe(UTC_MIDNIGHT)
-    }
+    expect(parseTime('2026-11-13')).not.toBe(UTC_MIDNIGHT)
+  })
+
+  it('时分秒越界一律返回 null，不被引擎静默进位', () => {
+    // 旧实现只有年月日做回读校验：10:75 被进成 11:15、10:00:99 被进成 10:01:39 而通过，
+    // 23:70 却因为跨天被同日校验拦下——同类非法输入一半可用、一半报错
+    expect(parseTime('2026-11-13 10:75')).toBeNull()
+    expect(parseTime('2026-11-13 10:00:99')).toBeNull()
+    expect(parseTime('2026-11-13 23:70')).toBeNull()
+    // 边界上的合法值必须照旧通过
+    expect(parseTime('2026-11-13 23:59:59')).toBe(Date.UTC(2026, 10, 13, 15, 59, 59))
   })
 
   it('空格分隔的日期时间按本地时间解析', () => {

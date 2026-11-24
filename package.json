@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
-    "typecheck": "turbo run typecheck && pnpm typecheck:scripts",
+    "typecheck": "turbo run typecheck && pnpm typecheck:scripts && pnpm typecheck:workspaces",
+    "typecheck:workspaces": "turbo run typecheck --dry=json | node -e \"const fs=require('node:fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));const declared=new Set((p.tasks||[]).map(t=>t.package));const missing=(p.packages||[]).filter(n=>!declared.has(n));if(missing.length){console.error('[@h5/typecheck] 以下 workspace 没有 typecheck 脚本，turbo 会静默跳过：'+missing.join(', '));process.exit(1)}console.log('[@h5/typecheck] '+declared.size+'/'+p.packages.length+' 个 workspace 都声明了 typecheck（无静默跳过）')\"",
     "lint": "eslint . --max-warnings 0",
     "lint:style": "stylelint \"**/*.{css,vue}\" --max-warnings 0",
     "format": "prettier --write .",

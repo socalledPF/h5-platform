@@ -68,6 +68,22 @@ export function createAppViteConfig(options) {
       css: {
         postcss: createPostcssConfig(),
       },
+      /**
+       * 各 app 的 `test` 脚本是 `vitest run`，跑在 app 目录里，只认这份配置。
+       * 缺了 test 段时 vitest 退回 environment: 'node'，DOM 测试直接
+       * `ReferenceError: document is not defined`；vue() 已在上面 plugins 里，
+       * SFC 测试才编译得动。根 vitest.config.ts 覆盖的是另一条路径（仓库根跑全量）。
+       */
+      test: {
+        environment: 'jsdom',
+        include: ['tests/**/*.test.ts'],
+        /**
+         * Components({ resolvers: [VantResolver()] }) 会给模板里的 van-* 注入
+         * `vant/es/<组件>/style/index` 这类 CSS 导入。vant 若被当成外部依赖交给 Node 加载，
+         * Node 直接报 `Unknown file extension ".css"`；inline 之后才由 vite 转换。
+         */
+        server: { deps: { inline: [/[\\/]node_modules[\\/]vant[\\/]/] } },
+      },
       server: {
         host: true,
         port: 5173,

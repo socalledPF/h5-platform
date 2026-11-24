@@ -155,6 +155,13 @@ export interface MockAdapter {
   alert?: (options: AlertOptions) => void
   /** 注入 token 提供者；返回 null 表示未登录，mock 会以 1004 拒绝。 */
   getToken?: () => TokenResult | null | Promise<TokenResult | null>
+  /**
+   * mock 会话预置的占位 token（默认 `'mock-token'`）。
+   *
+   * 占位值是**会话状态**（「已登录，但只有占位身份」），不是 `auth.getToken` 的兜底值：
+   * `auth.logout()` 之后会话为 null，`getToken` 以 `1004` 拒绝，与真实原生的未登录回答一致。
+   */
+  placeholderToken?: string
   /** 注入存储后端，默认 localStorage（不可用时退化到内存 Map）。 */
   storage?: MockStorage
   /** 注入能力列表，默认返回全部已定义方法名。 */

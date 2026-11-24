@@ -21,6 +21,14 @@ const STORAGE_PREFIX = 'h5:bridge:mock:'
 
 const MOCK_APP_VERSION = 'mock'
 
+/**
+ * `configureMock()` 预置的占位 token。
+ *
+ * 它是**会话值**，不是 `auth.getToken` 的兜底值：mock 启动即处于「已登录，但只有占位身份」的状态，
+ * 这样 `auth.logout()` 才能真正清空登录态（清空后再取 token 必须以 1004 拒绝，与真实原生的「未登录」一致）。
+ */
+const PLACEHOLDER_TOKEN = 'mock-token'
+
 /** `effectiveType` → 协议网络类型。`slow-2g` 归到 `2g`：协议里没有更细的档位。 */
 const EFFECTIVE_TYPE_MAP: Readonly<Record<string, NetworkInfo['type']>> = {
   'slow-2g': '2g',
@@ -32,8 +40,10 @@ const EFFECTIVE_TYPE_MAP: Readonly<Record<string, NetworkInfo['type']>> = {
 
 let adapter: MockAdapter | null = null
 
-/** mock 登录态：`auth.login` 写入、`auth.logout` 清空；`auth.getToken` 优先返回它。 */
+/** mock 登录态：`configureMock` 预置占位值，`auth.login` 写入、`auth.logout` 清空。 */
 let sessionToken: string | null = null
+/** 当前 `sessionToken` 是否只是 `configureMock` 预置的占位值（尚未真实登录过）。 */
+let sessionTokenIsPlaceholder = false
 let loginSeq = 0
 
 /** mock 分支的事件出口，由 core 注册（避免 mock ↔ core 的循环依赖）。 */
@@ -46,10 +56,16 @@ export function setMockEventSink(sink: ((event: string, data: unknown) => void) 
   eventSink = sink
 }
 
-/** 开启浏览器 mock 并注入 UI / token / 存储实现；重复调用以最后一次为准（mock 会话同时重置）。 */
+/**
+ * 开启浏览器 mock 并注入 UI / token / 存储实现；重复调用以最后一次为准（mock 会话同时重置）。
+ *
+ * mock 会话被显式置为「已登录 + 占位 token」，而不是等 `getToken` 时兜底出一个假 token：
+ * 兜底会让 `auth.logout()` 不可达（登出后下一次 getToken 又「登录成功」）。
+ */
 export function configureMock(next: MockAdapter): void {
   adapter = next
-  sessionToken = null
+  sessionToken = next.placeholderToken ?? PLACEHOLDER_TOKEN
+  sessionTokenIsPlaceholder = true
 }
 
 /** 当前是否路由到 mock 分支。 */
@@ -61,6 +77,7 @@ export function isMockActive(): boolean {
 export function resetMock(): void {
   adapter = null
   sessionToken = null
+  sessionTokenIsPlaceholder = false
   memoryStorage.clear()
 }
 
@@ -188,24 +205,32 @@ async function mockToken(current: MockAdapter, method: string): Promise<TokenRes
     if (token === null) throw new BridgeError(CODE.DENIED, 'mock: 未登录', method)
     return token
   }
-  // 未注入 provider 时用 mock 会话 token，让「登录 → 取 token」闭环在浏览器里可跑
-  return { token: sessionToken ?? 'mock-token', expireAt: Date.now() + MOCK_TOKEN_TTL_MS }
+  // 未注入 provider 时用 mock 会话 token；会话不存在（登出后）就以 1004 拒绝，
+  // 与真实原生「未登录」的回答一致：绝不能兜底出一个假 token，否则登出永远不可达。
+  if (sessionToken === null) throw new BridgeError(CODE.DENIED, 'mock: 未登录', method)
+  return { token: sessionToken, expireAt: Date.now() + MOCK_TOKEN_TTL_MS }
 }
 
 /**
- * mock 登录：写入一个每次登录都不同的 mock token 并推送 `auth.change`。
+ * mock 登录：写入一个每次登录都不同的 mock token。
  *
- * 每次登录换一个 token，才能在浏览器里演练设计文档 6.1 的换账号分支（上一个 token 非空且不同 → 整页刷新）。
+ * 只有「本次登录之前已经是一个真实会话、且新 token 不同」才推送 `auth.change`——
+ * 那才是设计文档 6.1 的换账号分支（`@h5/core` 见到 token 变化会整页刷新）。
+ * 首次登录（含占位身份之后、登出之后）是从「无账号」到「有账号」，推送会让浏览器里点一次登录就整页重载。
  */
 function mockLogin(): void {
+  const previous = sessionToken
+  const hadRealSession = previous !== null && !sessionTokenIsPlaceholder
   loginSeq += 1
   sessionToken = `mock-login-${loginSeq}`
-  emitAuthChange(sessionToken)
+  sessionTokenIsPlaceholder = false
+  if (hadRealSession && previous !== sessionToken) emitAuthChange(sessionToken)
 }
 
 /** mock 登出：清空 mock 登录态并推送 `auth.change`（载荷 token 为 null）。 */
 function mockLogout(): void {
   sessionToken = null
+  sessionTokenIsPlaceholder = false
   emitAuthChange(null)
 }
 

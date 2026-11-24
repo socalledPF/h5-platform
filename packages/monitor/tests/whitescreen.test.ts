@@ -61,7 +61,8 @@ describe('白屏检测（设计文档 11.2）', () => {
     const reports = whiteScreenReports()
     expect(reports).toHaveLength(1)
     expect(reports[0]).toMatchObject({ selector: '#app' })
-    expect(String(reports[0].recentErrors)).toContain('earlier boom')
+    // 断言数组形态：用 String() 包一层会让数组和拼接字符串同时通过，string[] 的对齐就白改了
+    expect(reports[0].recentErrors).toEqual(['earlier boom'])
   })
 
   it('根节点有文本或子元素时保持安静', async () => {
@@ -143,6 +144,6 @@ describe('captureError 与白屏的协作', () => {
     startWhiteScreenCheck('#app')
     await vi.advanceTimersByTimeAsync(3_000)
 
-    expect(String(whiteScreenReports()[0].recentErrors)).toContain('首屏接口失败')
+    expect(whiteScreenReports()[0].recentErrors).toEqual(['首屏接口失败'])
   })
 })

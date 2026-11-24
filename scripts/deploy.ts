@@ -2,7 +2,7 @@
 /**
  * deploy —— 按应用发布静态资源到 CDN、校验产物、打印上线与回滚指令（设计方案 §9）。
  *
- *   pnpm deploy --app <name> [--version <v>] [--env dev|test|pre|prod] [--execute --yes]
+ *   pnpm run deploy --app <name> [--version <v>] [--env dev|test|pre|prod] [--execute --yes]
  *              [--allow-dirty] [--allow-stale]
  *
  * 默认 dry-run：只解析 / 校验 / 打印计划，不访问网络、不上传任何文件。
@@ -54,9 +54,15 @@ const ENVIRONMENT_HOSTS: Record<Environment, { entry: string; cdn: string; note:
 
 const HELP = `deploy · 按应用发布到 CDN（设计方案 §9）
 
+注意：必须写成 pnpm run deploy，不能省掉 run。
+  pnpm 自带一个同名的 deploy 子命令：省掉 run 的短形式会先被它截走，
+  它不认识 --app，于是报 "unexpected argument '--app' found"，命令根本跑不到这个脚本。
+  ✖ 省略 run 的短形式
+  ✔ pnpm run deploy --app member --allow-dirty
+
 用法
-  pnpm deploy --app <name> [选项]
-  pnpm deploy <name> [选项]
+  pnpm run deploy --app <name> [选项]
+  pnpm run deploy <name> [选项]
 
 参数
   --app <name>        应用目录名，必须存在于 apps/ 下（也可作为第一个位置参数）
@@ -71,9 +77,11 @@ const HELP = `deploy · 按应用发布到 CDN（设计方案 §9）
 发布前校验（dry-run 也执行；--help 不执行）
   1. 工作区干净：git status --porcelain 非空则列出改动路径并拒绝发布，
      因为发布标识里的 commit 无法证明就是 dist 的来源。覆盖：--allow-dirty
-  2. 产物不过期：apps/<app>/dist 中最新的文件 mtime 必须不早于 HEAD 提交时间
+  2. 产物不过期：apps/<app>/dist/assets 中最早的文件 mtime 必须不早于 HEAD 提交时间
      （git log -1 --format=%ct），否则打印「dist 构建于 …，HEAD 提交于 …」并拒绝发布，
-     防止「昨天构建、今天提交两次」把旧产物发成新 commit。覆盖：--allow-stale
+     防止「昨天构建、今天提交两次」把旧产物发成新 commit。取 earliest 而不是 latest：
+     否则 touch 一下 dist/index.html（或 §9.4 新生成的 index.<release>.html）就能洗白旧产物。
+     覆盖：--allow-stale
   两条都只是证据检查，不修改任何文件；git 读不到时只告警、不阻断（dry-run 同样适用）。
 
 do 什么
@@ -97,11 +105,11 @@ do 什么
   0 成功（含 dry-run）  1 校验或使用错误  2 意外失败（例如上传命令失败）
 
 示例
-  pnpm deploy --app member
-  pnpm deploy member --env test --version 0.2.0
-  pnpm deploy --app member --env prod --execute --yes
-  pnpm deploy --app member --allow-stale        # 明确接受比 HEAD 旧的产物
-  UPLOAD_CMD="rsync -av {src} {dest}" pnpm deploy --app member --execute --yes
+  pnpm run deploy --app member
+  pnpm run deploy member --env test --version 0.2.0
+  pnpm run deploy --app member --env prod --execute --yes
+  pnpm run deploy --app member --allow-stale        # 明确接受比 HEAD 旧的产物
+  UPLOAD_CMD="rsync -av {src} {dest}" pnpm run deploy --app member --execute --yes
 `
 
 const COLOR_ENABLED = process.stdout.isTTY === true && process.env.NO_COLOR === undefined
@@ -146,8 +154,8 @@ type DistReport = {
   totalSize: number
   assetCount: number
   mapFiles: string[]
-  /** dist 内最新的文件 mtime（毫秒），用于判定产物是否比 HEAD 旧。 */
-  newestMtime: number
+  /** dist/assets/** 中最早的文件 mtime（毫秒），用于判定产物是否比 HEAD 旧；无 asset 时为 null。 */
+  oldestAssetMtime: number | null
 }
 
 function readFlagValue(
@@ -367,12 +375,13 @@ function assertCleanTree(app: string, allowDirty: boolean): string | null {
 /**
  * S1 守卫二：dist 比 HEAD 旧就拒绝发布。
  * 「昨天构建、今天提交两次」会把旧产物发成新 commit，§9.2 的 sourcemap 归属、§9.4 的回滚与
- * 发布记录都会指向错误的版本。返回 null 表示通过，返回字符串表示「放行但有告警」。
+ * 发布记录都会指向错误的版本。判定依据是 buildMtime —— dist/assets 里最早的 mtime，
+ * 不是整个 dist 里最新的 mtime（理由见 scanDist）。返回 null 表示通过，返回字符串表示「放行但有告警」。
  */
 function assertFreshBuild(
   app: string,
   packageName: string,
-  newestMtime: number,
+  buildMtime: number | null,
   allowStale: boolean,
 ): string | null {
   const commitLines = readGitLines(['log', '-1', '--format=%ct'])
@@ -382,10 +391,14 @@ function assertFreshBuild(
     return '读不到 HEAD 提交时间（不是 git 仓库或 git 不可用），已跳过「产物是否过期」检查'
   }
 
-  const commitTime = commitSeconds * 1000
-  if (newestMtime >= commitTime) return null
+  if (buildMtime === null) {
+    return `apps/${app}/dist/assets 下没有任何文件，无法判定产物是否过期，已跳过该项检查`
+  }
 
-  const detail = `dist 构建于 ${formatTimestamp(newestMtime)}，HEAD 提交于 ${formatTimestamp(commitTime)}`
+  const commitTime = commitSeconds * 1000
+  if (buildMtime >= commitTime) return null
+
+  const detail = `dist 构建于 ${formatTimestamp(buildMtime)}，HEAD 提交于 ${formatTimestamp(commitTime)}`
   if (allowStale) {
     return `产物比 HEAD 旧（${detail}），已按 --allow-stale 继续：上传的可能是更早的构建`
   }
@@ -402,7 +415,7 @@ function scanDist(distDir: string): DistReport {
   let fileCount = 0
   let totalSize = 0
   let assetCount = 0
-  let newestMtime = 0
+  let oldestAssetMtime: number | null = null
 
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -415,14 +428,23 @@ function scanDist(distDir: string): DistReport {
       const stats = statSync(full)
       fileCount += 1
       totalSize += stats.size
-      if (stats.mtimeMs > newestMtime) newestMtime = stats.mtimeMs
+      if (/^assets[/\\]/.test(relative(distDir, full))) {
+        assetCount += 1
+        // 陈旧判定取 assets 里「最早」的 mtime，而不是整个 dist 里最新的那个。
+        // 取最新等于形同虚设：§9.4 步骤 2 新生成的 index.<release>.html、一个 .DS_Store、
+        // 重新拷贝的 index.html，任何一个刚写过的文件都会把「最新 mtime」刷新成现在，
+        // 让一整包陈旧产物看起来像刚构建的。而一次真实构建会重写全部 assets，
+        // 所以「最早的 asset」一定带着这次构建的时间，陈旧产物无法靠 touch 单个文件洗白。
+        if (oldestAssetMtime === null || stats.mtimeMs < oldestAssetMtime) {
+          oldestAssetMtime = stats.mtimeMs
+        }
+      }
       if (entry.name.endsWith('.map')) mapFiles.push(relative(distDir, full))
-      if (/^assets[/\\]/.test(relative(distDir, full))) assetCount += 1
     }
   }
 
   walk(distDir)
-  return { fileCount, totalSize, assetCount, mapFiles, newestMtime }
+  return { fileCount, totalSize, assetCount, mapFiles, oldestAssetMtime }
 }
 
 function verifyDist(app: string, packageName: string): { distDir: string; report: DistReport } {
@@ -549,7 +571,9 @@ function printReleaseSteps(context: {
   console.log('  1. 上传静态资源到 CDN 的新版本目录（不覆盖旧文件）')
   if (context.uploadCommand === null) {
     console.log(`     ${yellow('UPLOAD_CMD 未设置')}，上传命令无法展开，示例：`)
-    console.log(`     UPLOAD_CMD="rsync -av {src} {dest}" pnpm deploy --app <name> --execute --yes`)
+    console.log(
+      `     UPLOAD_CMD="rsync -av {src} {dest}" pnpm run deploy --app <name> --execute --yes`,
+    )
   } else {
     console.log(`     $ ${context.uploadCommand}`)
   }
@@ -580,12 +604,12 @@ function main(argv: string[]): number {
     return 0
   }
   if (options.errors.length > 0) {
-    throw new CliError(`${options.errors.join('\n')}\n\n用 pnpm deploy --help 查看用法。`)
+    throw new CliError(`${options.errors.join('\n')}\n\n用 pnpm run deploy --help 查看用法。`)
   }
   if (options.app === null || options.app === '') {
     throw new CliError(
       `缺少 --app <name>。\n可用应用：${listApps().join(' / ') || '（apps/ 为空）'}\n\n` +
-        '用法：pnpm deploy --app <name>　用 pnpm deploy --help 查看用法。',
+        '用法：pnpm run deploy --app <name>　用 pnpm run deploy --help 查看用法。',
     )
   }
   if (!isEnvironment(options.env)) {
@@ -630,7 +654,12 @@ function main(argv: string[]): number {
 
   const { distDir, report } = verifyDist(app, packageName)
 
-  const staleWarning = assertFreshBuild(app, packageName, report.newestMtime, options.allowStale)
+  const staleWarning = assertFreshBuild(
+    app,
+    packageName,
+    report.oldestAssetMtime,
+    options.allowStale,
+  )
   if (staleWarning !== null) guardWarnings.push(staleWarning)
 
   const { hash, warning: hashWarning } = readGitShortHash()
@@ -687,7 +716,7 @@ function main(argv: string[]): number {
   if (uploadCommand === null) {
     throw new CliError(
       '未配置 UPLOAD_CMD，拒绝执行上传（不会凭空猜上传方式，也不会使用任何内置凭据）。\n' +
-        '示例：UPLOAD_CMD="rsync -av {src} {dest}" pnpm deploy --app ' +
+        '示例：UPLOAD_CMD="rsync -av {src} {dest}" pnpm run deploy --app ' +
         `${app} --execute --yes\n` +
         '占位符：{src} = dist 绝对路径，{dest} = CDN 版本目录。',
     )

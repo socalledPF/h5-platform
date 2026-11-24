@@ -40,8 +40,8 @@ const DEFAULT_ROOT_SELECTOR = '#app'
 const unsubscribers: (() => void)[] = []
 
 /**
- * 统一启动入口（设计文档 4）：浏览器 mock → Bridge 就绪 → 环境识别 → 登录态 → 监控 →
- * vConsole → 导航模式 → 路由/导航 → 返回拦截。返回**未挂载**的 App，由 `main.ts` 调用 mount。
+ * 统一启动入口（设计文档 4）：浏览器 mock → 上报器 → Bridge 就绪 → 环境识别 → 登录态 →
+ * 监控 init → vConsole → 导航模式 → 路由/导航 → 返回拦截。返回**未挂载**的 App，由 `main.ts` 调用 mount。
  *
  * ```ts
  * createH5App(App, { appId: 'member', router, requireLogin: true }).then((app) => app.mount('#app'))
@@ -53,6 +53,11 @@ export async function createH5App(
 ): Promise<App<Element>> {
   if (shouldPreinstallMock(options)) configureMock(buildMockAdapter(options, env))
 
+  // 上报器必须早于第一次 Bridge 调用装上：initEnv → app.getInfo() 就是启动期的第一次调用，
+  // 旧客户端（1001 方法不存在）或 800ms 超时（-1）都在这里发生。装晚了这些失败会落进
+  // errorReporter === null 的空档被静默丢弃，§11.2 的兼容性指标于是系统性漏掉最老的客户端。
+  installBridgeErrorReporting(options)
+
   await ready(READY_WAIT_MS)
   await initEnv({ appId: options.appId })
 
@@ -61,7 +66,7 @@ export async function createH5App(
   const pinia = createPinia()
   setActivePinia(pinia)
 
-  installMonitor(options)
+  initMonitorAdapter(options)
   await bootstrapAuthSafely(options.requireLogin === true)
   unsubscribers.push(subscribeAuthChange())
   void initVConsole()
@@ -86,17 +91,31 @@ export async function createH5App(
 /**
  * 落地路由同步（设计文档 7.2）：等初始导航结算后按 currentRoute 显式同步一次标题 /
  * 导航栏模式 / 栈深度，兜住「钩子注册晚于初始导航」的时序窗口（幂等，不与 afterEach 冲突）。
- * 初始导航失败不能挡住挂载——白屏比未同步更糟，因此按当前路由尽力同步后继续。
+ * 初始导航失败或迟迟不结算都不能挡住挂载——白屏比未同步更糟，因此按当前路由尽力同步后继续。
  */
 async function syncLandingRoute(current: Router): Promise<void> {
   if (typeof window !== 'undefined') {
-    try {
-      await current.isReady()
-    } catch {
-      // 初始导航失败：下面仍按 currentRoute 兜底同步
-    }
+    // 必须设上限：全局 beforeEach 里 await 一个永不结算的 Promise（等原生登录、等配置）时，
+    // isReady() 永不结算，createH5App 也永不 resolve → main.ts 的 .then(mount) 不执行，
+    // 后面的白屏检测同样装不上：用户看到永久白屏，而且一条遥测都没有。
+    await waitWithLimit(current, READY_WAIT_MS)
   }
   syncCurrentRoute()
+}
+
+/** 等初始导航结算，最多等 `timeoutMs`；导航失败 / 超时都只是降级，不抛错。 */
+async function waitWithLimit(current: Router, timeoutMs: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    await Promise.race([
+      current.isReady().catch(() => undefined),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, timeoutMs)
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
 }
 
 /**
@@ -114,19 +133,40 @@ function shouldPreinstallMock(options: CreateH5AppOptions): boolean {
   return getUAInfo().appVersion === ''
 }
 
-/** 监控注入（设计文档 11.2）：adapter 由业务传入，core 不 import @h5/monitor。 */
-function installMonitor(options: CreateH5AppOptions): void {
+/**
+ * Bridge 失败上报与埋点 adapter（设计文档 11.2）：adapter 由业务传入，core 不 import @h5/monitor。
+ *
+ * 只做「接上」这件事，不做 `init`：这一步必须早于第一次 Bridge 调用，
+ * 而 `init` 需要 initEnv 之后才有值的 env 快照。
+ */
+function installBridgeErrorReporting(options: CreateH5AppOptions): void {
+  const monitor = options.monitor
+  if (monitor === undefined) {
+    // 同一次页面生命周期里可能二次启动（微前端重挂、单测）：上一轮的 reporter / adapter 会
+    // 闭包住旧的 monitor 实例，不清掉就会被当成这次启动的实现，上报与埋点串进上一份配置。
+    setBridgeErrorReporter(null)
+    setMonitorAdapter(undefined)
+    return
+  }
+  setMonitorAdapter(monitor)
+  setBridgeErrorReporter((method, code, msg) => {
+    monitor.reportBridgeError?.(method, code, msg)
+  })
+}
+
+/**
+ * 监控初始化：必须在 initEnv 之后 —— init 当场读 env 的环境开关（isProd / isPre / isTest）
+ * 决定 Sentry 的 environment，提前调用只会读到「四个开关全是 false」的半初始化快照。
+ * init 抛错不影响启动。
+ */
+function initMonitorAdapter(options: CreateH5AppOptions): void {
   const monitor = options.monitor
   if (monitor === undefined) return
-  setMonitorAdapter(monitor)
   try {
     monitor.init?.({ appId: options.appId, env })
   } catch (error) {
     rememberQuietly(error)
   }
-  setBridgeErrorReporter((method, code, msg) => {
-    monitor.reportBridgeError?.(method, code, msg)
-  })
 }
 
 /**

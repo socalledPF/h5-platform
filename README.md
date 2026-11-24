@@ -37,7 +37,7 @@ h5-platform/
 │   └── config/                  # vite / tsconfig / eslint / postcss 共享配置
 ├── scripts/
 │   ├── create-app.ts            # 脚手架：pnpm create:app <name>
-│   └── deploy.ts                # 发布：pnpm deploy --app <name>
+│   └── deploy.ts                # 发布：pnpm run deploy --app <name>
 ├── tests/                       # 仓库级单测（tests/**/*.test.ts，jsdom 环境）
 ├── docs/                        # 文档站（VitePress）：协议与手册，见下方文档索引
 ├── turbo.json                   # 任务编排与缓存
@@ -81,7 +81,7 @@ pnpm --filter @h5/app-member dev
 | `pnpm format:check`      | `prettier --check .`                                    | 只检查不修改，CI 风格                                                   |
 | `pnpm clean`             | `rm -rf node_modules coverage .turbo apps/*/dist …`     | 清理依赖与产物（不删源码）                                              |
 | `pnpm create:app <name>` | `node --experimental-strip-types scripts/create-app.ts` | 新建业务应用（见下节）                                                  |
-| `pnpm deploy`            | `node --experimental-strip-types scripts/deploy.ts`     | 发布到 CDN（默认 dry-run，见 [docs/deployment.md](docs/deployment.md)） |
+| `pnpm run deploy`            | `node --experimental-strip-types scripts/deploy.ts`     | 发布到 CDN（默认 dry-run，见 [docs/deployment.md](docs/deployment.md)） |
 | `pnpm docs:dev`          | `vitepress dev docs`                                    | 本地预览文档站，`docs/` 就是站点根目录                                  |
 | `pnpm docs:build`        | `vitepress build docs`                                  | 构建静态文档站到 `docs/.vitepress/dist`（含死链检查）                   |
 | `pnpm docs:preview`      | `vitepress preview docs`                                | 本地预览 `docs:build` 的产物                                            |
@@ -108,7 +108,7 @@ pnpm create:app order --dry-run  # 只看文件计划与文案替换，不写文
 
 ## 发布与回滚
 
-`pnpm deploy --app <app>` 默认 dry-run：解析版本与 commit、校验产物、打印缓存头策略和发布/回滚 5 步，只有 `--execute --yes` 且配置了 `UPLOAD_CMD` 才真的上传。完整流程（URL 规划、灰度、回滚、旧资源保留 30 天）见 **[docs/deployment.md](docs/deployment.md)**。
+`pnpm run deploy --app <app>` 默认 dry-run：解析版本与 commit、校验产物、打印缓存头策略和发布/回滚 5 步，只有 `--execute --yes` 且配置了 `UPLOAD_CMD` 才真的上传。完整流程（URL 规划、灰度、回滚、旧资源保留 30 天）见 **[docs/deployment.md](docs/deployment.md)**。
 
 ## 环境变量
 

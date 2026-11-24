@@ -66,6 +66,19 @@ function handleNativeRightButtonClick(button: NavBarButton): void {
 
 const rootClass = computed(() => (isH5.value ? 'app-nav-bar--h5' : 'app-nav-bar--empty'))
 
+/**
+ * 只表达「内容」的同步指纹。
+ * 父组件按文档用法写 `:right="[{ ... }]"`，每次重渲染都是个新数组：深监听会让每次渲染
+ * 都往原生桥跑一次 setTitle + setRightButtons，这里用内容指纹把相等的重渲染挡掉。
+ */
+const syncKey = computed(() =>
+  JSON.stringify([
+    props.title ?? '',
+    resolvedMode.value,
+    rightButtons.value.map((button) => [button.id, button.text, button.icon ?? '']),
+  ]),
+)
+
 const rootStyle = computed<Record<string, string>>(() => {
   const style: Record<string, string> = { '--app-nav-safe-top': safeTop.value }
   if (props.backgroundColor !== undefined) style.backgroundColor = props.backgroundColor
@@ -82,14 +95,10 @@ watch(
   { immediate: true },
 )
 
-watch(
-  () => [props.title, props.right, resolvedMode.value] as const,
-  () => {
-    refreshSafeTop()
-    syncNativeBar()
-  },
-  { deep: true },
-)
+watch(syncKey, () => {
+  refreshSafeTop()
+  syncNativeBar()
+})
 
 onMounted(() => {
   refreshSafeTop()
@@ -103,6 +112,12 @@ onBeforeUnmount(() => {
   unsubscribe?.()
   unsubscribe = undefined
   publishedIds.clear()
+  // 原生模式下本组件是原生栏的唯一发布者：卸载时不清空，从带右侧按钮的页面切到
+  // 不带 AppNavBar 的页面，原生栏会留着旧标题和已经失效的按钮。
+  if (resolvedMode.value === 'native') {
+    void bridgeNav.setTitle('').catch(ignoreBridgeFailure)
+    void bridgeNav.setRightButtons([]).catch(ignoreBridgeFailure)
+  }
   window.removeEventListener('resize', refreshSafeTop)
   window.removeEventListener('orientationchange', refreshSafeTop)
 })

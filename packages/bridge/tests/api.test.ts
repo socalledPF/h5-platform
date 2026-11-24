@@ -101,7 +101,11 @@ const apiCases: ApiCase[] = [
 
 describe('方法名常量', () => {
   it.each(apiCases)('$name 发送协议方法名 $method', async ({ method, call }) => {
-    const native = installFakeAndroid((_message, respond) => respond({ code: 0, data: null }))
+    // app.getCapabilities 只接受数组载荷：畸形载荷按「能力未知」以 1002 拒绝（设计文档 6 规则 2），
+    // 这里应答一个合法空数组，其余方法照旧应答 null（本用例只关心发出的方法名）。
+    const native = installFakeAndroid((message, respond) =>
+      respond({ code: 0, data: message.method === METHODS.app.getCapabilities ? [] : null }),
+    )
 
     await call()
 

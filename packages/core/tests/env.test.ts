@@ -6,6 +6,7 @@ afterEach(() => {
   Reflect.deleteProperty(window.navigator, 'userAgent')
   document.documentElement.removeAttribute('style')
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
 
 describe('env 默认值', () => {
@@ -164,6 +165,18 @@ describe('env 默认值', () => {
     expect(env.safeAreaTop).toBe(0)
   })
 
+  it('appVersion 不回退 __APP_VERSION__（那是 H5 版本，两个字段不能撞成同一个值）', async () => {
+    vi.stubGlobal('__APP_VERSION__', '1.4.2')
+    configureMock({ handlers: { 'app.getInfo': () => undefined } })
+
+    await expect(initEnv({ appId: 'member', isApp: true })).resolves.toBe(env)
+
+    // 拿不到 App 版本就留空：request 层把它映射成 X-App-Version: unknown，
+    // 而 §11.2 的 h5Version 才用 __APP_VERSION__，两个字段必须能区分
+    expect(env.appVersion).toBe('')
+    expect(env.appVersion).not.toBe('1.4.2')
+  })
+
   it('App 内从 UA 解析系统与机型（原生信息不可用时）', async () => {
     // mock 在文件内是模块级状态，显式声明“原生取不到信息”，避免用例相互影响
     configureMock({
@@ -233,6 +246,30 @@ describe('Android 安全区兜底（设计文档 8.2）', () => {
 
     await initEnv({ appId: 'activity', isApp: true })
 
+    expect(rootStyle().getPropertyValue('--safe-top')).toBe('')
+    expect(rootStyle().getPropertyValue('--safe-bottom')).toBe('')
+  })
+
+  it('二次 init 归零时删掉变量，而不是留着上一次的 44px', async () => {
+    configureMock({
+      handlers: {
+        'app.getInfo': () => ({ statusBarHeight: 44, safeAreaTop: 44, safeAreaBottom: 34 }),
+      },
+    })
+    await initEnv({ appId: 'activity', isApp: true })
+    expect(rootStyle().getPropertyValue('--safe-top')).toBe('44px')
+    expect(rootStyle().getPropertyValue('--safe-bottom')).toBe('34px')
+
+    // 同一个页面第二次 initEnv（二次 createH5App / 微前端重挂）：量测值归零
+    configureMock({
+      handlers: {
+        'app.getInfo': () => ({ statusBarHeight: 0, safeAreaTop: 0, safeAreaBottom: 0 }),
+      },
+    })
+    await initEnv({ appId: 'activity', isApp: true })
+
+    // 必须删掉而不是写 0px：残留的 44px 会顶开所有 padding-top: var(--safe-top) 的头部，
+    // 而写 0px 又会盖住 CSS 的 env() 兜底
     expect(rootStyle().getPropertyValue('--safe-top')).toBe('')
     expect(rootStyle().getPropertyValue('--safe-bottom')).toBe('')
   })

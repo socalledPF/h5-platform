@@ -62,7 +62,7 @@ pnpm dev                 # 启动所有应用的 dev server（member 在 http://
 pnpm build               # 构建所有应用到 apps/*/dist
 pnpm test                # 仓库级单测 + 各包/应用的测试
 pnpm create:app <name>   # 从 apps/member 复制骨架新建业务应用
-pnpm deploy --app <name> # 发布到 CDN（默认 dry-run）
+pnpm run deploy --app <name> # 发布到 CDN（默认 dry-run）
 pnpm docs:dev            # 本地预览本文档站
 ```
 

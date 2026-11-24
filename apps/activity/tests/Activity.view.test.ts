@@ -102,16 +102,27 @@ describe('Activity 页面渲染', () => {
     const host = await mountActivity({ endAt: '2099-11-13 10:00:00' })
 
     const cta = host.querySelector('[data-testid="activity-cta"]')
+    const join = host.querySelector<HTMLElement>('[data-testid="activity-join"]')
     expect(cta).not.toBeNull()
+    expect(join).not.toBeNull()
     expect(cta?.classList.contains('activity__cta--hidden')).toBe(false)
     expect(cta?.getAttribute('aria-hidden')).toBe('false')
+    expect(cta?.hasAttribute('inert')).toBe(false)
 
     await setKeyboard(true)
     expect(cta?.classList.contains('activity__cta--hidden')).toBe(true)
     expect(cta?.getAttribute('aria-hidden')).toBe('true')
+    // aria-hidden 只把 CTA 从无障碍树里摘掉，键盘焦点照样落进 van-button 并能回车触发，
+    // 所以隐藏期间必须真的 inert（jsdom 不实现 inert / 样式表，失效由属性 + .activity__cta--hidden
+    // 里的 visibility: hidden 保证，这里钉住属性这一侧）
+    expect(cta?.hasAttribute('inert')).toBe(true)
 
     await setKeyboard(false)
     expect(cta?.classList.contains('activity__cta--hidden')).toBe(false)
     expect(cta?.getAttribute('aria-hidden')).toBe('false')
+    expect(cta?.hasAttribute('inert')).toBe(false)
+    // 键盘收起后 CTA 恢复可交互：焦点能回到按钮上
+    join?.focus()
+    expect(document.activeElement).toBe(join)
   })
 })

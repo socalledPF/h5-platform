@@ -117,6 +117,29 @@ describe('AppNavBar / 原生模式', () => {
     expect(bridgeMock.unsubscribe).toHaveBeenCalledTimes(1)
     expect(bridgeMock.listeners.has('nav.rightButtonClick')).toBe(false)
   })
+
+  it('卸载时通知原生清空标题与右侧按钮，避免切页后残留', () => {
+    const wrapper = mount(AppNavBar, { props: { title: '我的订单', right: [HELP] } })
+    bridgeMock.setTitle.mockClear()
+    bridgeMock.setRightButtons.mockClear()
+
+    wrapper.unmount()
+
+    expect(bridgeMock.setTitle).toHaveBeenCalledWith('')
+    expect(bridgeMock.setRightButtons).toHaveBeenCalledWith([])
+  })
+
+  it('重渲染但 right 内容相同（新数组）时不重新同步', async () => {
+    const wrapper = mount(AppNavBar, { props: { title: '我的订单', right: [HELP] } })
+    bridgeMock.setTitle.mockClear()
+    bridgeMock.setRightButtons.mockClear()
+
+    // 文档用法就是每次渲染新建数组字面量：内容一样不该产生一次桥往返
+    await wrapper.setProps({ right: [{ ...HELP }] })
+
+    expect(bridgeMock.setTitle).not.toHaveBeenCalled()
+    expect(bridgeMock.setRightButtons).not.toHaveBeenCalled()
+  })
 })
 
 describe('AppNavBar / H5 模式', () => {
@@ -157,6 +180,16 @@ describe('AppNavBar / H5 模式', () => {
     const wrapper = mount(AppNavBar, { props: { title: '活动页', showBack: false } })
 
     expect(wrapper.find('[data-testid="app-nav-bar-back"]').exists()).toBe(false)
+  })
+
+  it('H5 模式卸载时不动原生导航栏', () => {
+    navMode.value = 'h5'
+    const wrapper = mount(AppNavBar, { props: { title: '我的订单', right: [HELP] } })
+
+    wrapper.unmount()
+
+    expect(bridgeMock.setTitle).not.toHaveBeenCalled()
+    expect(bridgeMock.setRightButtons).not.toHaveBeenCalled()
   })
 
   it('高度包含状态栏安全区，immersive 时不包含', () => {

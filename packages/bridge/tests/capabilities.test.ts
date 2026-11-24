@@ -46,24 +46,31 @@ const MALFORMED_PAYLOADS: ReadonlyArray<readonly [string, unknown]> = [
 ]
 
 describe('能力探测载荷防御（设计文档 13.2）', () => {
-  it.each(MALFORMED_PAYLOADS)('载荷 %s 按「未知」处理：不缓存、可重试', async (_label, payload) => {
-    const native = installCapabilityNative(() => payload)
+  it.each(MALFORMED_PAYLOADS)(
+    '载荷 %s 以 1002 拒绝（未知不等于空列表）：不缓存、可重试',
+    async (_label, payload) => {
+      const native = installCapabilityNative(() => payload)
 
-    await expect(loadCapabilities()).resolves.toEqual([])
-    expect(cachedCapabilityList()).toBeNull()
+      // 失败就是失败：resolve [] 会让「列表里没有」与 canIUse 的乐观判定自相矛盾（设计文档 6 规则 2）
+      await expect(loadCapabilities()).rejects.toMatchObject({
+        code: CODE.BAD_PARAMS,
+        method: METHODS.app.getCapabilities,
+      })
+      expect(cachedCapabilityList()).toBeNull()
 
-    // 第二次调用必须真的再次请求原生方法（旧实现会命中 [] 缓存而不再请求）
-    await loadCapabilities()
-    expect(native.callCount()).toBe(2)
-    expect(cachedCapabilityList()).toBeNull()
+      // 第二次调用必须真的再次请求原生方法（旧实现会命中 [] 缓存而不再请求）
+      await expect(loadCapabilities()).rejects.toMatchObject({ code: CODE.BAD_PARAMS })
+      expect(native.callCount()).toBe(2)
+      expect(cachedCapabilityList()).toBeNull()
 
-    native.restore()
-  })
+      native.restore()
+    },
+  )
 
   it('载荷不合法时 canIUse 仍保持乐观，不把未知当成不支持', async () => {
     installCapabilityNative(() => ({ code: 0 }))
 
-    await loadCapabilities()
+    await expect(loadCapabilities()).rejects.toMatchObject({ code: CODE.BAD_PARAMS })
     expect(cachedCapabilityList()).toBeNull()
 
     // 参数已收窄为 BridgeMethod，这里用真实方法名验证「能力未知 → 乐观 true」的语义
@@ -81,9 +88,9 @@ describe('能力探测载荷防御（设计文档 13.2）', () => {
     setBridgeErrorReporter(reporter)
     const native = installCapabilityNative(() => ({ code: 0 }))
 
-    await loadCapabilities()
-    await loadCapabilities()
-    await loadCapabilities()
+    for (let i = 0; i < 3; i += 1) {
+      await expect(loadCapabilities()).rejects.toMatchObject({ code: CODE.BAD_PARAMS })
+    }
 
     expect(native.callCount()).toBe(3)
     expect(reporter).toHaveBeenCalledTimes(1)
@@ -99,7 +106,7 @@ describe('能力探测载荷防御（设计文档 13.2）', () => {
       call === 1 ? { code: 0 } : { code: 0, data: ['share.open'] },
     )
 
-    await loadCapabilities()
+    await expect(loadCapabilities()).rejects.toMatchObject({ code: CODE.BAD_PARAMS })
     expect(cachedCapabilityList()).toBeNull()
 
     await expect(loadCapabilities()).resolves.toEqual(['share.open'])
@@ -120,10 +127,10 @@ describe('能力探测载荷防御（设计文档 13.2）', () => {
       },
     })
 
-    await loadCapabilities()
+    await expect(loadCapabilities()).rejects.toMatchObject({ code: CODE.BAD_PARAMS })
     expect(cachedCapabilityList()).toBeNull()
 
-    await loadCapabilities()
+    await expect(loadCapabilities()).rejects.toMatchObject({ code: CODE.BAD_PARAMS })
     expect(calls).toBe(2)
     expect(cachedCapabilityList()).toBeNull()
   })
@@ -190,7 +197,9 @@ describe('合法能力列表的缓存语义', () => {
     it('预算耗尽后显式 loadCapabilities() 仍然真正发请求', async () => {
       const native = installCapabilityNative(() => ({ code: 0 }))
 
-      for (let i = 0; i < 4; i += 1) await loadCapabilities()
+      for (let i = 0; i < 4; i += 1) {
+        await expect(loadCapabilities()).rejects.toMatchObject({ code: CODE.BAD_PARAMS })
+      }
       expect(native.callCount()).toBe(4)
 
       // 隐式探测已被预算拦住
@@ -199,7 +208,7 @@ describe('合法能力列表的缓存语义', () => {
       expect(native.callCount()).toBe(4)
 
       // 显式调用不受上限约束
-      await expect(loadCapabilities()).resolves.toEqual([])
+      await expect(loadCapabilities()).rejects.toMatchObject({ code: CODE.BAD_PARAMS })
       expect(native.callCount()).toBe(5)
     })
 

@@ -27,6 +27,8 @@ class FakeVisualViewport extends EventTarget {
 }
 
 const LAYOUT_HEIGHT = 800
+const PORTRAIT_WIDTH = 400
+const LANDSCAPE_WIDTH = 800
 let viewport: FakeVisualViewport
 let scrollTo: ReturnType<typeof vi.spyOn>
 
@@ -52,8 +54,13 @@ function setLayoutHeight(next: number): void {
   Object.defineProperty(window, 'innerHeight', { configurable: true, value: next })
 }
 
+function setLayoutWidth(next: number): void {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: next })
+}
+
 /**
- * 模拟旋转 / 地址栏变化：布局视口和视觉视口一起变。
+ * 模拟旋转：布局视口高度**和宽度**一起变（宽度变化是「这次不是键盘」的独立信号，
+ * 只改 innerHeight 的话几何上和 Android adjustResize 键盘无法区分）。
  * 两个事件的到达顺序在真机上不保证，两种顺序都模拟一遍。
  */
 function rotate(
@@ -62,6 +69,7 @@ function rotate(
   order: 'window-first' | 'viewport-first' = 'window-first',
 ): void {
   setLayoutHeight(nextLayoutHeight)
+  setLayoutWidth(LANDSCAPE_WIDTH)
   viewport.height = nextViewportHeight
   const layoutEvent = (): void => {
     window.dispatchEvent(new Event('resize'))
@@ -78,9 +86,21 @@ function rotate(
   }
 }
 
+/**
+ * 模拟 Android adjustResize / `interactive-widget=resizes-content`：
+ * innerHeight 和 visualViewport.height **一起**变矮（宽度不变），窗口与视觉视口两个事件都推。
+ */
+function shrinkBoth(nextHeight: number): void {
+  setLayoutHeight(nextHeight)
+  viewport.height = nextHeight
+  window.dispatchEvent(new Event('resize'))
+  viewport.dispatchEvent(new Event('resize'))
+}
+
 beforeEach(() => {
   viewport = new FakeVisualViewport(LAYOUT_HEIGHT)
   setLayoutHeight(LAYOUT_HEIGHT)
+  setLayoutWidth(PORTRAIT_WIDTH)
   Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport })
   scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined)
   coreMock.env.os = 'ios'
@@ -88,6 +108,7 @@ beforeEach(() => {
 
 afterEach(() => {
   scrollTo.mockRestore()
+  document.body.innerHTML = ''
   Object.defineProperty(window, 'visualViewport', { configurable: true, value: undefined })
 })
 
@@ -122,6 +143,74 @@ describe('useKeyboard', () => {
     expect(keyboard.height.value).toBe(0)
   })
 
+  it('Android adjustResize：innerHeight 与视觉视口一起变矮时仍判定键盘弹起', () => {
+    const keyboard = mountKeyboard()
+
+    shrinkBoth(LAYOUT_HEIGHT - 320)
+
+    expect(keyboard.visible.value).toBe(true)
+    expect(keyboard.height.value).toBe(320)
+  })
+
+  it('Android adjustResize：键盘收起后回到 false，再弹起仍能识别', () => {
+    const keyboard = mountKeyboard()
+
+    shrinkBoth(LAYOUT_HEIGHT - 320)
+    shrinkBoth(LAYOUT_HEIGHT)
+
+    expect(keyboard.visible.value).toBe(false)
+    expect(keyboard.height.value).toBe(0)
+
+    // 基线没被键盘高度污染：下一次弹起仍是 320
+    shrinkBoth(LAYOUT_HEIGHT - 320)
+
+    expect(keyboard.visible.value).toBe(true)
+    expect(keyboard.height.value).toBe(320)
+  })
+
+  it('Android adjustResize：输入框聚焦时布局视口变矮不会被当成新基线', () => {
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+
+    const keyboard = mountKeyboard()
+
+    shrinkBoth(LAYOUT_HEIGHT - 320)
+
+    expect(keyboard.visible.value).toBe(true)
+    expect(keyboard.height.value).toBe(320)
+
+    shrinkBoth(LAYOUT_HEIGHT)
+    expect(keyboard.visible.value).toBe(false)
+  })
+
+  it('地址栏收缩（无输入聚焦、宽度未变）会重设基线', () => {
+    const keyboard = mountKeyboard()
+
+    shrinkBoth(LAYOUT_HEIGHT - 60)
+
+    expect(keyboard.visible.value).toBe(false)
+    expect(keyboard.height.value).toBe(0)
+
+    // 基线已降到 740：键盘 300 高 → 300；若基线仍是 800 会得到 360
+    viewport.press(440)
+
+    expect(keyboard.visible.value).toBe(true)
+    expect(keyboard.height.value).toBe(300)
+  })
+
+  it('iOS 上滚露出输入框（offsetTop 非 0）时键盘高度不被抵掉', () => {
+    const keyboard = mountKeyboard()
+
+    // 键盘 300 高，页面为露出输入框上滚 250px
+    viewport.offsetTop = 250
+    viewport.height = LAYOUT_HEIGHT - 300
+    viewport.dispatchEvent(new Event('scroll'))
+
+    expect(keyboard.visible.value).toBe(true)
+    expect(keyboard.height.value).toBe(300)
+  })
+
   it('收起状态旋转（800→400）：visible 保持 false，键盘按新基线量', () => {
     const keyboard = mountKeyboard()
 
@@ -153,6 +242,7 @@ describe('useKeyboard', () => {
     const keyboard = mountKeyboard()
 
     setLayoutHeight(400)
+    setLayoutWidth(LANDSCAPE_WIDTH)
     viewport.height = 400
     window.dispatchEvent(new Event('orientationchange'))
 

@@ -1,7 +1,7 @@
 import { device as bridgeDevice, on } from '@h5/bridge'
 import { installGlobalErrorHandlers } from './error'
 import { initSentry } from './sentry'
-import { configure, type MonitorOptions, setNetwork } from './state'
+import { configure, h5Version, type MonitorOptions, setNetwork } from './state'
 
 /** 是否已初始化，避免重复订阅原生事件。 */
 let initialized = false
@@ -26,8 +26,21 @@ export function initMonitor(options: MonitorOptions): void {
   void initSentry({
     dsn: options.dsn ?? '',
     environment: resolveEnvironment(options),
-    release: `${options.appId}@${options.env.appVersion || '0.0.0'}`,
+    release: sentryRelease(options.appId),
   })
+}
+
+/**
+ * Sentry 的 `release` 用 **H5 构建版本**（`appId@__APP_VERSION__`），不用原生 App 版本。
+ *
+ * - 能部署、能回滚的是 H5 包：`release` 要能对应到“我该回滚到哪个构建”。
+ * - 原生版本不可靠且不稳定：`env.appVersion` 在原生 `appInfo` 缺失/超时（800ms）时退回
+ *   构建版本，同一份 H5 会因一次超时被分到两个 release 上，Sentry 的 issue 归组随之断裂。
+ * - 原生版本并没有丢：它在每条上报的公共字段 `appVersion` 里，随事件进 Sentry 的 extra，
+ *   仍可按 App 版本检索；两个字段各司其职，不互相兜底。
+ */
+function sentryRelease(appId: string): string {
+  return `${appId}@${h5Version()}`
 }
 
 function resolveEnvironment(options: MonitorOptions): string {

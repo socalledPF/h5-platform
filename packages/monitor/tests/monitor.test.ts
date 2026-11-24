@@ -118,10 +118,12 @@ describe('initMonitor（设计文档 11.2）', () => {
       message: 'boom',
       extra: 1,
     })
-    // uid 不再是 token 片段，而是定长、不可逆的会话级假名
+    // uid 不再是 token 片段，而是定长、不可逆的登录区间级假名
     expect(payload.uid).toBe('u_76daaa8d')
     // 未注入 __APP_VERSION__ 时降级，而不是静默上报一个假版本
     expect(payload.h5Version).toBe('0.0.0')
+    // 两个版本字段来源不同：h5Version 不得拿 appVersion 兜底（反之亦然）
+    expect(payload.h5Version).not.toBe(payload.appVersion)
     expect(typeof payload.network).toBe('string')
   })
 
@@ -145,6 +147,24 @@ describe('initMonitor（设计文档 11.2）', () => {
     captureError(new Error('boom'))
 
     expect(recordsOf('error')[0].h5Version).toBe('0.0.0')
+  })
+
+  it('env.appVersion 缺失或为未知标记时，h5Version 仍是真实构建版本且两者可区分', () => {
+    vi.stubGlobal('__APP_VERSION__', '1.4.2')
+
+    // core 会把“原生 appInfo 缺失/超时”显式标成未知值（'unknown' 或空串）；
+    // monitor 只依赖 h5Version 自身，不依赖该标记的具体写法，两者也不得互相兜底。
+    for (const appVersion of ['', 'unknown']) {
+      resetMonitor()
+      initMonitor({ appId: 'member', env: { ...testEnv, appVersion } })
+
+      captureError(new Error('boom'))
+
+      const payload = recordsOf('error').at(-1)
+      expect(payload?.h5Version).toBe('1.4.2')
+      expect(payload?.appVersion).toBe(appVersion)
+      expect(payload?.h5Version).not.toBe(payload?.appVersion)
+    }
   })
 
   it('未登录时 uid 记为 anon', () => {
@@ -500,6 +520,8 @@ describe('Sentry 懒加载（设计文档 11.2）', () => {
   })
 
   it('线上且配置 dsn 时动态加载并初始化', async () => {
+    // release 口径：H5 构建版本（可部署/可回滚的那个），不是 testEnv.appVersion 5.6.0
+    vi.stubGlobal('__APP_VERSION__', '1.4.2')
     initMonitor({ appId: 'member', env: testEnv, dsn: 'https://key@sentry.example.com/1' })
 
     await vi.waitFor(() => {
@@ -509,7 +531,7 @@ describe('Sentry 懒加载（设计文档 11.2）', () => {
       expect.objectContaining({
         dsn: 'https://key@sentry.example.com/1',
         environment: 'prod',
-        release: 'member@5.6.0',
+        release: 'member@1.4.2',
       }),
     )
     expect(isSentryReady()).toBe(true)
@@ -699,7 +721,7 @@ describe('错误缓冲', () => {
   })
 })
 
-describe('uid：会话级假名（M1 修复：不再上报 token 片段）', () => {
+describe('uid：登录区间级假名（M1 修复：不再上报 token 片段，刷新不换名）', () => {
   // 真实 JWT 形状的 token：哈希已实测不含其任何 2 字符片段。
   const TOKEN_A = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1LTQyIn0.sig_7dQ4w9WgXcQ'
   const TOKEN_B = 'token-beta-2'
@@ -718,8 +740,66 @@ describe('uid：会话级假名（M1 修复：不再上报 token 片段）', () 
     expect(uidWithToken(TOKEN_A)).toBe('u_8229f1ff')
   })
 
-  it('不同 token（含 token 刷新）产生不同假名', () => {
+  it('不同登录区间（各自从 null 开始）产生不同假名：换账号不串号', () => {
     expect(uidWithToken(TOKEN_A)).not.toBe(uidWithToken(TOKEN_B))
+  })
+
+  it('token 被就地替换（模拟 401 刷新）时假名保持稳定：§11.2 的按用户聚合因此成立', () => {
+    initDefault()
+    useAuthStore().setToken(TOKEN_A)
+    captureError(new Error('before refresh'))
+    const before = recordsOf('error')[0].uid
+
+    // core/src/request.ts:86-87：refreshToken() 拿到新 token 后直接 setToken(newToken)，
+    // 中间不经过 null，monitor 只看到 token 变了 —— 这正是刷新与换账号同形的场景。
+    useAuthStore().setToken(TOKEN_B)
+    captureError(new Error('after refresh'))
+    const after = recordsOf('error')[1].uid
+
+    // 假名派生自**首个** token（u_8229f1ff 是 TOKEN_A 的派升值），刷新不重新派生
+    expect(after).toBe(before)
+    expect(after).toBe('u_8229f1ff')
+    // 与“直接拿新 token 派生”不同，证明缓存确实生效（否则这里会变红）
+    expect(after).not.toBe(uidWithToken(TOKEN_B))
+  })
+
+  it('token → null 记为 anon；登出窗口内有上报点后换账号，不沿用旧假名', () => {
+    initDefault()
+    useAuthStore().setToken(TOKEN_A)
+    captureError(new Error('logged in'))
+    expect(recordsOf('error')[0].uid).toBe('u_8229f1ff')
+
+    // 登出：登录页的页面埋点就是登出窗口里的上报点，缓存在这里被丢弃
+    useAuthStore().setToken(null)
+    trackPageView('/login')
+    expect(recordsOf('track')[0]).toMatchObject({ uid: 'anon', uidSource: 'anon' })
+
+    // 同一账号重新登录：同一 token 仍派生同一假名（哈希只依赖 token 本身）
+    useAuthStore().setToken(TOKEN_A)
+    captureError(new Error('back'))
+    expect(recordsOf('error')[1].uid).toBe('u_8229f1ff')
+
+    // 换账号登录：缓存已丢弃，必须换新假名
+    useAuthStore().setToken(null)
+    trackPageView('/login')
+    useAuthStore().setToken(TOKEN_B)
+    captureError(new Error('another account'))
+    expect(recordsOf('error')[2].uid).not.toBe('u_8229f1ff')
+    expect(recordsOf('error')[2].uid).toMatch(/^u_[0-9a-f]{8}$/)
+  })
+
+  it('已记录的取舍：两次上报之间发生的 A → null → B 观察不到，沿用旧假名', () => {
+    initDefault()
+    useAuthStore().setToken(TOKEN_A)
+    captureError(new Error('logged in'))
+
+    // 中间没有任何上报点：monitor 只在采集时读 token，看不到这段 null 窗口
+    useAuthStore().setToken(null)
+    useAuthStore().setToken(TOKEN_B)
+    captureError(new Error('switched silently'))
+
+    // 语义取舍的代价（见 state.ts resolveUid）：宁可不换名（少计用户），也不因刷新换名（多计）
+    expect(recordsOf('error')[1].uid).toBe('u_8229f1ff')
   })
 
   it('整条上报里不含 token 的任何 ≥2 字符片段', () => {

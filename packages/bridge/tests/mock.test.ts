@@ -216,35 +216,54 @@ describe('浏览器 mock', () => {
     await expect(device.getNetwork()).resolves.toEqual({ type: 'none' })
   })
 
-  it('mock 登录 / 登出推送 auth.change：登录带 token，登出带 null', async () => {
+  it('mock 首次登录不推送 auth.change：登录态从「占位」变成真实 token', async () => {
     configureMock({})
     const received: Array<{ token: string | null }> = []
     on('auth.change', (data) => received.push(data))
 
-    await auth.login()
-    expect(received).toHaveLength(1)
-    const token = received[0]?.token
-    expect(typeof token).toBe('string')
-    // 登录后的 token 必须能被 auth.getToken 读到，登录闭环才算跑通
-    await expect(auth.getToken()).resolves.toMatchObject({ token })
-
-    await auth.logout()
-    expect(received).toHaveLength(2)
-    expect(received[1]).toEqual({ token: null })
+    // configureMock 预置的是占位会话，不是真实登录态
     await expect(auth.getToken()).resolves.toMatchObject({ token: 'mock-token' })
+
+    await auth.login()
+    // 首次登录不推送：@h5/core 的 applyAuthChange 会把「token 变化」当成换账号并整页刷新
+    expect(received).toHaveLength(0)
+    // 登录后的 token 必须能被 auth.getToken 读到，登录闭环才算跑通
+    const loginToken = await auth.getToken()
+    expect(typeof loginToken.token).toBe('string')
+    expect(loginToken.token).not.toBe('mock-token')
   })
 
-  it('两次登录拿到不同 token，换账号分支可在浏览器里演练', async () => {
+  it('mock 登出后 getToken 以 1004 拒绝，不再兜底出假 token', async () => {
+    configureMock({})
+    const received: Array<{ token: string | null }> = []
+    on('auth.change', (data) => received.push(data))
+
+    await auth.logout()
+    expect(received).toEqual([{ token: null }])
+
+    // 登出必须真的不可取自 token：否则 ensureToken() 会静默用假 token 重新「登录成功」
+    await expect(auth.getToken()).rejects.toMatchObject({
+      code: CODE.DENIED,
+      method: 'auth.getToken',
+    })
+    await expect(auth.refreshToken()).rejects.toMatchObject({ code: CODE.DENIED })
+  })
+
+  it('第二次登录换 token 并推送 auth.change，换账号分支可在浏览器里演练', async () => {
     configureMock({})
     const tokens: Array<string | null> = []
     on('auth.change', (data) => tokens.push(data.token))
 
     await auth.login()
-    await auth.logout()
-    await auth.login()
+    const first = (await auth.getToken()).token
 
-    expect(tokens).toHaveLength(3)
-    expect(tokens[0]).not.toBe(tokens[2])
+    await auth.login()
+    // 已有真实会话 + token 不同 → 推送，@h5/core 的整页刷新分支因此可达
+    expect(tokens).toHaveLength(1)
+    const switched = tokens[0]
+    expect(typeof switched).toBe('string')
+    expect(switched).not.toBe(first)
+    await expect(auth.getToken()).resolves.toMatchObject({ token: switched })
   })
 
   it('cancelShare 开启时 share.open 以 1003 拒绝，且不上报监控', async () => {

@@ -52,6 +52,13 @@ jobs:
       - name: Lint styles
         run: pnpm lint:style
 
+      # 开发者本地门禁原样搬进 CI：`pnpm test` = 根 vitest（仓库根 + apps/*/tests）+ `turbo run test`
+      # （各 app 自己的 `vitest run`，走 apps/*/vite.config.ts → @h5/config 的 test 段）。
+      # 之前这里只有 test:coverage，`turbo run test` 从未在 CI 执行过，所以 apps/activity
+      # 的 test 脚本在 node 环境下红掉也没人发现。docs 里宣传的门禁就是 `pnpm test`，CI 必须跑同一条。
+      - name: Test (root + per-app suites)
+        run: pnpm test
+
       # 单测 + 覆盖率门禁：设计文档 12.4 要求共享包覆盖率 ≥ 80%，
       # 阈值写在 packages/*/vitest.config.ts 的 coverage.thresholds 里，低于阈值即失败。
       - name: Test + coverage gate (shared packages >= 80%)

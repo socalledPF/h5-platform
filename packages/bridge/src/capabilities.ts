@@ -1,6 +1,6 @@
 import { isAvailable } from './channel'
 import { invoke } from './core'
-import { CODE, reportBridgeError } from './error'
+import { BridgeError, CODE, reportBridgeError } from './error'
 import { isMockActive } from './mock'
 import { METHODS } from './protocol'
 import type { BridgeMethod } from './protocol'
@@ -54,13 +54,16 @@ export function loadCapabilities(): Promise<string[]> {
     .then((list) => {
       const capabilities = normalizeCapabilities(list)
       if (capabilities === null) {
-        // 载荷不合法 = 能力「未知」，不是「一项能力都没有」（设计文档 13.2）。
-        // 绝不写入 cachedCapabilities：否则整页会永久按空列表判定，所有能力开关集体失效且无法重试。
-        // 清空 in-flight 允许后续调用重新探测；本次返回空数组只为满足 Promise<string[]> 契约。
-        inflight = null
-        failedProbes += 1
+        // 载荷不合法 = 能力「未知」，不是「一项能力都没有」（设计文档 13.2、6 规则 2）。
+        // 绝不写入 cachedCapabilities：写空列表会让整页永久按 [] 判定，所有能力开关集体失效且无法重试。
+        // 也不能 resolve([])：[] 是**确定的空能力集**，会让 [await app.getCapabilities()] 与
+        // canIUse 的乐观判定自相矛盾（同一页面 canIUse 为 true、列表里却没有）。失败就该 reject。
         reportMalformedOnce()
-        return []
+        throw new BridgeError(
+          CODE.BAD_PARAMS,
+          'invalid capabilities payload',
+          METHODS.app.getCapabilities,
+        )
       }
       cachedCapabilities = capabilities
       return [...capabilities]

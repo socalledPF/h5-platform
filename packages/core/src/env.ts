@@ -2,7 +2,12 @@ import { app as bridgeApp, getUAInfo, isAvailable } from '@h5/bridge'
 import type { AppEnv } from './types'
 
 declare global {
-  /** 由 vite define 注入；单测环境下为 undefined。 */
+  /**
+   * 由 vite define 注入；单测环境下为 undefined。
+   *
+   * 这是 **H5 构建版本**，不是 App 版本：core 不再拿它回退 `env.appVersion`（见 11.2）。
+   * @h5/monitor 的 `h5Version` 读同一常量，其可见性依赖本声明，勿删。
+   */
   const __APP_VERSION__: string | undefined
   const __BUILD_TIME__: string | undefined
   const __APP_ID__: string | undefined
@@ -50,7 +55,12 @@ export async function initEnv(overrides: Partial<AppEnv> = {}): Promise<AppEnv> 
   Object.assign(env, {
     isApp,
     appId: overrides.appId ?? readBuildConstant('appId'),
-    appVersion: overrides.appVersion ?? (ua.appVersion || readBuildConstant('appVersion')),
+    // 只认 App 自己的版本（UA 的 MyApp/<版本> 或原生 app.getInfo）。
+    // 绝不回退 __APP_VERSION__：那是 H5 构建版本（@h5/monitor 的 h5Version 读的也是它），
+    // 一旦回退，浏览器 / 旧客户端 / getInfo 超时这三种情况下 §11.2 的「App 版本 / H5 版本」
+    // 会变成同一个值，两个字段再也无法互相印证。取不到就留空，
+    // 由 request 层映射成 X-App-Version: unknown。
+    appVersion: overrides.appVersion ?? ua.appVersion,
     os: ua.os,
     osVersion: ua.osVersion,
     device: ua.device,
@@ -78,18 +88,26 @@ export async function initEnv(overrides: Partial<AppEnv> = {}): Promise<AppEnv> 
  * 若两端都写，最终取值与是否叠加以客户端结论为准。
  *
  * 只在量测值 > 0 时写：浏览器里全为 0，写 0px 反而会盖掉 CSS 里的 `env()` 兜底。
+ * 反过来，量测值为 0 时必须**删掉**上一次启动写下的值——initEnv 会在同一个页面上跑第二次
+ * （二次 createH5App、微前端重挂、单测），残留的 `--safe-top: 44px` 会顶开所有
+ * `padding-top: var(--safe-top)` 的头部。
  */
 function applySafeAreaVariables(): void {
   try {
     if (typeof document === 'undefined') return
     const root = document.documentElement
     const top = env.safeAreaTop > 0 ? env.safeAreaTop : env.statusBarHeight
-    const bottom = env.safeAreaBottom
-    if (top > 0) root.style.setProperty('--safe-top', `${top}px`)
-    if (bottom > 0) root.style.setProperty('--safe-bottom', `${bottom}px`)
+    applySafeAreaVariable(root, '--safe-top', top)
+    applySafeAreaVariable(root, '--safe-bottom', env.safeAreaBottom)
   } catch {
     // 拿不到 DOM（SSR / 单测环境异常）时保持 CSS env() 兜底，不影响启动
   }
+}
+
+/** 有值就写、没值就删：删掉后 CSS 的 `env()` 兜底才会重新生效。 */
+function applySafeAreaVariable(root: HTMLElement, name: string, value: number): void {
+  if (value > 0) root.style.setProperty(name, `${value}px`)
+  else root.style.removeProperty(name)
 }
 
 /**
@@ -181,9 +199,8 @@ function readMeta(key: string): string {
   }
 }
 
-function readBuildConstant(name: 'appVersion' | 'buildTime' | 'appId'): string {
+function readBuildConstant(name: 'buildTime' | 'appId'): string {
   try {
-    if (name === 'appVersion' && typeof __APP_VERSION__ === 'string') return __APP_VERSION__
     if (name === 'buildTime' && typeof __BUILD_TIME__ === 'string') return __BUILD_TIME__
     if (name === 'appId' && typeof __APP_ID__ === 'string') return __APP_ID__
   } catch {

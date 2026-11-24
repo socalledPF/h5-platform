@@ -79,7 +79,7 @@ window.__H5Bridge.emit('network.change', { type: 'wifi' })
 | `1003` | 用户取消（取消分享 / 取消授权 / 取消扫码） | `reject`，业务一般静默             | 否           |
 | `1004` | 权限拒绝（相机、定位、相册等）             | `reject`，提示引导用户去设置       | 是           |
 | `-1`   | 前端超时（H5 侧产生）                      | `reject`，可重试或降级             | 是           |
-| `-2`   | 不在 App 环境（H5 侧产生）                 | `reject`，走 mock 或 Web 降级      | 是           |
+| `-2`   | 不在 App 环境（H5 侧产生）                 | `reject`，走 mock 或 Web 降级      | 否           |
 
 补充约定：
 
@@ -358,29 +358,30 @@ App 启动 WebView
 `configureMock(adapter)` 开启 mock。开启后 `invoke` 直接走 mock 实现，不依赖原生通道，
 `ready()` 立即返回 `true`，`canIUse()` 在能力未知时返回 `true`。
 
-| 方法                                                              | 默认行为（未注入 adapter）                                                                                                          |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `app.getInfo`                                                     | 由 UA 解析出 `os / osVersion / device`，`appVersion = 'mock'`，`statusBarHeight = 0`，安全区为 `0`                                  |
-| `app.getCapabilities`                                             | 返回全部已定义方法名                                                                                                                |
-| `auth.getToken` / `auth.refreshToken`                             | 返回 `{ token: 'mock-token', expireAt: 当前时间 + 7 天 }`；注入了 `getToken` 则用其返回值，返回 `null` 表示未登录（以 `1004` 拒绝） |
-| `auth.login` / `auth.logout`                                      | 直接 resolve                                                                                                                        |
-| `nav.open` / `nav.back`                                           | `history.pushState` / `history.back`（`external` 时 `window.open`）                                                                 |
-| `nav.close` / `setBar` / `setRightButtons` / `setBackInterceptor` | 直接 resolve                                                                                                                        |
-| `nav.setTitle`                                                    | 设置 `document.title`                                                                                                               |
-| `ui.toast` / `ui.alert` / `ui.loading`                            | `console.info` 输出                                                                                                                 |
-| `share.open`                                                      | `console.info` 输出链接                                                                                                             |
-| `device.getNetwork`                                               | 由 `navigator.onLine` / `navigator.connection` 推断                                                                                 |
-| `device.getLocation`                                              | `{ latitude: 0, longitude: 0 }`（可注入 `location`）                                                                                |
-| `device.scan`                                                     | `{ text: '' }`                                                                                                                      |
-| `device.vibrate`                                                  | `navigator.vibrate` 可用时调用，否则忽略                                                                                            |
-| `media.chooseImage`                                               | `{ paths: [] }`                                                                                                                     |
-| `media.previewImage` / `media.saveImage`                          | 直接 resolve                                                                                                                        |
-| `storage.get` / `storage.set`                                     | 默认 `localStorage`（key 前缀 `h5:bridge:mock:`，值为 JSON）；不可用时退化为内存 Map                                                |
-| `track.event`                                                     | `console.info` 输出                                                                                                                 |
-| 未定义的方法                                                      | 以 `1001` 拒绝（与真机一致）                                                                                                        |
+| 方法                                                              | 默认行为（未注入 adapter）                                                                                                                                                                                                                                                    |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.getInfo`                                                     | 由 UA 解析出 `os / osVersion / device`，`appVersion = 'mock'`，`statusBarHeight = 0`，安全区为 `0`                                                                                                                                                                            |
+| `app.getCapabilities`                                             | 返回全部已定义方法名                                                                                                                                                                                                                                                          |
+| `auth.getToken` / `auth.refreshToken`                             | 返回当前 mock **会话** token（`configureMock()` 播种的占位 token，登录后为 `mock-login-<n>`），`expireAt = 当前时间 + 7 天`；注入了 `getToken` 则以其返回值为准（返回 `null` 表示未登录，以 `1004` 拒绝）；**退出登录后没有会话 token，直接以 `1004` 拒绝**（不再回落占位值） |
+| `auth.login` / `auth.logout`                                      | `login` 写入一个新的 `mock-login-<n>` 并在**已有非占位会话**时推送 `auth.change`（用于演练 §6.1 换账号刷新）；从占位会话首次登录不推送，避免开发态整页刷新。`logout` 清空会话并推送 `auth.change{token:null}`，之后 `getToken` 以 `1004` 拒绝                                 |
+| `nav.open` / `nav.back`                                           | `history.pushState` / `history.back`（`external` 时 `window.open`）                                                                                                                                                                                                           |
+| `nav.close` / `setBar` / `setRightButtons` / `setBackInterceptor` | 直接 resolve                                                                                                                                                                                                                                                                  |
+| `nav.setTitle`                                                    | 设置 `document.title`                                                                                                                                                                                                                                                         |
+| `ui.toast` / `ui.alert` / `ui.loading`                            | `console.info` 输出                                                                                                                                                                                                                                                           |
+| `share.open`                                                      | `console.info` 输出链接；`MockAdapter.cancelShare = true` 时以 `1003` 拒绝，用于演练「用户取消分享」                                                                                                                                                                          |
+| `device.getNetwork`                                               | 由 `navigator.onLine` / `navigator.connection` 推断                                                                                                                                                                                                                           |
+| `device.getLocation`                                              | `{ latitude: 0, longitude: 0 }`（可注入 `location`）                                                                                                                                                                                                                          |
+| `device.scan`                                                     | `{ text: '' }`                                                                                                                                                                                                                                                                |
+| `device.vibrate`                                                  | `navigator.vibrate` 可用时调用，否则忽略                                                                                                                                                                                                                                      |
+| `media.chooseImage`                                               | `{ paths: [] }`                                                                                                                                                                                                                                                               |
+| `media.previewImage` / `media.saveImage`                          | 直接 resolve                                                                                                                                                                                                                                                                  |
+| `storage.get` / `storage.set`                                     | 默认 `localStorage`（key 前缀 `h5:bridge:mock:`，值为 JSON）；不可用时退化为内存 Map                                                                                                                                                                                          |
+| `track.event`                                                     | `console.info` 输出                                                                                                                                                                                                                                                           |
+| 未定义的方法                                                      | 以 `1001` 拒绝（与真机一致）                                                                                                                                                                                                                                                  |
 
 可注入能力（`MockAdapter`）：`toast`、`alert`、`getToken`、`storage`、`capabilities`、
-`trackEvent`、`location`、`network`、`share`、`open`、`handlers`（任意方法的自定义实现）。
+`trackEvent`、`location`、`network`、`share`、`open`、`handlers`（任意方法的自定义实现）、
+`cancelShare`（布尔，让 `share.open` 返回 `1003`）、`placeholderToken`（字符串，替换默认占位 token `mock-token`）。
 注入的 `storage` 使用原始 key（不加前缀），便于与业务存储对齐。
 
 mock 的硬约束：**bridge 不依赖 vant / vue / axios**，所有 UI 行为都由 `@h5/core` 注入；
