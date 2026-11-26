@@ -1,3 +1,6 @@
+import { configureMock } from '@h5/bridge'
+import { AxiosError } from 'axios'
+import type { AxiosAdapter, AxiosResponse } from 'axios'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // 层序例外（与 create-app.test.ts 借用 bridge 的 resetMock 同例）：这里接通 monitor 包的真实
 // 首屏实现，才能验证「core + monitor 合起来只产出一套首屏阶段」这条集成不变量。
@@ -10,6 +13,7 @@ import {
 } from '../../monitor/src/perf'
 // eslint-disable-next-line no-restricted-syntax -- 层序例外：同上，测试要读取 monitor 的真实采集状态做断言
 import { collectedRecords, resetMonitor } from '../../monitor/src/state'
+import { applyAuthChange, resetAuthState, useAuthStore } from '../src/auth'
 import { env } from '../src/env'
 import {
   getMonitorAdapter,
@@ -22,6 +26,7 @@ import {
   resetMonitorState,
   setMonitorAdapter,
 } from '../src/monitor'
+import { request, resetRequestState } from '../src/request'
 import { initVConsole, resetVConsoleState } from '../src/vconsole'
 import type { MonitorAdapter } from '../src/types'
 
@@ -44,10 +49,13 @@ function createAdapter(): Required<MonitorAdapter> {
     markFirstScreen: vi.fn(),
     markFirstScreenApi: vi.fn(),
     reportPerf: vi.fn(),
+    markSessionEnd: vi.fn(),
   }
 }
 
 beforeEach(() => {
+  resetAuthState()
+  resetRequestState()
   resetMonitorState()
   resetMonitor()
   resetPerf()
@@ -57,6 +65,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks()
+  resetAuthState()
+  resetRequestState()
   resetMonitorState()
   resetMonitor()
   resetPerf()
@@ -217,5 +227,74 @@ describe('vConsole 注入（设计文档 11.1）', () => {
     window.history.replaceState({}, '', '/?debug=1')
     await initVConsole()
     expect(vconsoleConstructor).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('会话结束通知（设计文档 6.1 / 11.2：假名不跨账号）', () => {
+  it('登出（applyAuthChange(null)）通知监控作废按用户派生的标识', () => {
+    const markSessionEnd = vi.fn()
+    setMonitorAdapter({ markSessionEnd })
+    const auth = useAuthStore()
+    auth.setToken('token-a', 1)
+
+    applyAuthChange(null)
+
+    expect(markSessionEnd).toHaveBeenCalledTimes(1)
+    expect(auth.token).toBeNull()
+
+    // 重复登出（登录态本来就是空）幂等：照旧通知一次，但不抛错
+    expect(() => applyAuthChange(null)).not.toThrow()
+    expect(markSessionEnd).toHaveBeenCalledTimes(2)
+  })
+
+  it('同一账号换 token（applyAuthChange 换非空 token）不通知会话结束', () => {
+    const markSessionEnd = vi.fn()
+    setMonitorAdapter({ markSessionEnd })
+    useAuthStore().setToken('token-a', 1)
+
+    applyAuthChange('token-b')
+
+    expect(markSessionEnd).not.toHaveBeenCalled()
+  })
+
+  it('未注入监控 / 监控实现抛错时登出照常清空登录态', () => {
+    expect(() => applyAuthChange(null)).not.toThrow()
+
+    setMonitorAdapter({
+      markSessionEnd: () => {
+        throw new Error('monitor down')
+      },
+    })
+    useAuthStore().setToken('token-a', 1)
+
+    expect(() => applyAuthChange(null)).not.toThrow()
+    expect(useAuthStore().token).toBeNull()
+  })
+
+  it('401 刷新换 token 走 setToken，不触发会话结束（同一用户保留假名）', async () => {
+    const markSessionEnd = vi.fn()
+    setMonitorAdapter({ markSessionEnd })
+    useAuthStore().setToken('token-old', 0)
+    configureMock({
+      handlers: { 'auth.refreshToken': () => ({ token: 'token-new', expireAt: 1 }) },
+    })
+
+    const adapter: AxiosAdapter = async (config) => {
+      const authorized = config.headers.get('Authorization') === 'Bearer token-new'
+      const response: AxiosResponse = {
+        data: authorized ? { code: 0, data: 'ok' } : { code: 401 },
+        status: authorized ? 200 : 401,
+        statusText: '',
+        headers: {},
+        config,
+      }
+      if (authorized) return response
+      throw new AxiosError('status 401', '401', config, null, response)
+    }
+
+    await expect(request({ url: '/api/a', adapter, retry: 0 })).resolves.toBe('ok')
+
+    expect(useAuthStore().token).toBe('token-new')
+    expect(markSessionEnd).not.toHaveBeenCalled()
   })
 })

@@ -274,6 +274,50 @@ describe('useKeyboard', () => {
     expect(keyboard.height.value).toBe(0)
   })
 
+  it('键盘弹起期间旋转（高度仍被键盘压着）：visible 保持 true，收起后才重建基线', () => {
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+
+    const keyboard = mountKeyboard()
+
+    // adjustResize：键盘把布局视口和视觉视口一起压到 150
+    shrinkBoth(150)
+    expect(keyboard.visible.value).toBe(true)
+
+    // 键盘没收起就旋转：宽度变了，但两个高度都还是 150/150
+    // 旧实现当场采纳 max(150, 150) 当基线 → next 为 0 → 键盘被判成收起，固定 CTA 盖住键盘
+    rotate(150, 150)
+    expect(keyboard.visible.value).toBe(true)
+
+    // 键盘收起后才有条件重建基线
+    shrinkBoth(LAYOUT_HEIGHT)
+    expect(keyboard.visible.value).toBe(false)
+    expect(keyboard.height.value).toBe(0)
+
+    // 基线没被键盘压矮的值污染：再弹起仍能识别出完整高度
+    viewport.press(LAYOUT_HEIGHT - 320)
+    expect(keyboard.visible.value).toBe(true)
+    expect(keyboard.height.value).toBe(320)
+  })
+
+  it('输入框聚焦时未超过阈值的变矮不会重设基线', () => {
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+
+    const keyboard = mountKeyboard()
+
+    // 比基线矮 80，未达 100 阈值 → 判成键盘收起
+    shrinkBoth(LAYOUT_HEIGHT - 80)
+    expect(keyboard.visible.value).toBe(false)
+
+    // 但输入框仍在聚焦，720 不能被当成新基线，否则键盘高度被算成 480-720 的差值 240
+    shrinkBoth(LAYOUT_HEIGHT - 320)
+    expect(keyboard.visible.value).toBe(true)
+    expect(keyboard.height.value).toBe(320)
+  })
+
   it('部分 iOS 只推 visualViewport.scroll 时也能识别键盘', () => {
     const keyboard = mountKeyboard()
 
@@ -298,6 +342,30 @@ describe('useKeyboard', () => {
     mountKeyboard()
 
     document.dispatchEvent(new Event('focusout'))
+
+    expect(scrollTo).toHaveBeenCalledWith(0, 0)
+  })
+
+  it('iOS 焦点在字段间切换（relatedTarget 是输入框）不回弹页面', () => {
+    const source = document.createElement('input')
+    const target = document.createElement('input')
+    document.body.append(source, target)
+    source.focus()
+
+    mountKeyboard()
+    document.dispatchEvent(new FocusEvent('focusout', { relatedTarget: target }))
+
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it('iOS 焦点移到非输入元素（relatedTarget 是按钮）仍回弹页面', () => {
+    const input = document.createElement('input')
+    const button = document.createElement('button')
+    document.body.append(input, button)
+    input.focus()
+
+    mountKeyboard()
+    document.dispatchEvent(new FocusEvent('focusout', { relatedTarget: button }))
 
     expect(scrollTo).toHaveBeenCalledWith(0, 0)
   })

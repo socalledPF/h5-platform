@@ -183,6 +183,7 @@ describe('initMonitor（设计文档 11.2）', () => {
       'init',
       'markFirstScreen',
       'markFirstScreenApi',
+      'markSessionEnd',
       'reportBridgeError',
       'reportPerf',
       'trackEvent',
@@ -568,6 +569,100 @@ describe('Sentry 懒加载（设计文档 11.2）', () => {
   })
 })
 
+describe('启动期（Sentry 未就绪）的上报补发（M1）', () => {
+  const DSN = 'https://key@sentry.example.com/1'
+
+  function capturedExtras(): Record<string, unknown>[] {
+    return sentryCaptureMock.mock.calls.map(
+      (call) => (call[1] as { extra: Record<string, unknown> }).extra,
+    )
+  }
+
+  it('未初始化时入队，init 后按真实 appId / env 补发，且只发一次', async () => {
+    // core 现在在上报器装好之后才 initEnv：启动期的 app.getInfo 失败会在
+    // state.env === null、Sentry 未初始化时到达这里。
+    expect(() => reportBridgeError('app.getInfo', 1001, 'old client')).not.toThrow()
+    expect(sentryCaptureMock).not.toHaveBeenCalled()
+
+    initDefault({ dsn: DSN })
+    await vi.waitFor(() => {
+      expect(sentryCaptureMock).toHaveBeenCalledTimes(1)
+    })
+
+    // 公共字段在 flush 时重算：不是入队那一刻的空值
+    expect(capturedExtras()[0]).toMatchObject({
+      appId: 'member',
+      appVersion: '5.6.0',
+      os: 'ios 16.3',
+      device: 'iPhone 14',
+      method: 'app.getInfo',
+      code: 1001,
+      msg: 'old client',
+    })
+    expect(capturedExtras()[0].appId).not.toBe('')
+
+    // flush 幂等：二次 initMonitor 不会把同一条错误再报一次
+    initDefault({ dsn: DSN })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(sentryCaptureMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('待上报队列有界：超过 50 条丢弃最旧的，且从不抛错', async () => {
+    for (let index = 0; index < 55; index += 1) {
+      expect(() => captureError(new Error(`early-${index}`))).not.toThrow()
+    }
+    expect(sentryCaptureMock).not.toHaveBeenCalled()
+
+    initDefault({ dsn: DSN })
+    await vi.waitFor(() => {
+      expect(sentryCaptureMock).toHaveBeenCalledTimes(50)
+    })
+
+    const messages = sentryCaptureMock.mock.calls.map((call) => (call[0] as Error).message)
+    expect(messages[0]).toBe('early-5')
+    expect(messages.at(-1)).toBe('early-54')
+  })
+
+  it('resetMonitor 会清空待上报队列，不会在下次 init 时补发', async () => {
+    reportBridgeError('app.getInfo', 1001, 'dropped')
+    resetMonitor()
+
+    initDefault({ dsn: DSN })
+    await vi.waitFor(() => {
+      expect(isSentryReady()).toBe(true)
+    })
+    await Promise.resolve()
+
+    captureError(new Error('after init'))
+    expect(sentryCaptureMock).toHaveBeenCalledTimes(1)
+    expect(capturedExtras()[0].message).toBe('after init')
+  })
+
+  it('确定不会加载 Sentry 时不再累积待上报队列（本地记录照旧）', async () => {
+    initDefault()
+    await Promise.resolve()
+
+    reportBridgeError('app.getInfo', 1001, 'no dsn')
+
+    expect(collectedRecords()).toHaveLength(1)
+    expect(sentryCaptureMock).not.toHaveBeenCalled()
+  })
+
+  it('enabled: false 时排队的事件也不补发（关闭上报必须整体静默）', async () => {
+    // 入队那一刻 enabled 还是缺省 true，真正的开关只在 initMonitor 时才知道
+    reportBridgeError('app.getInfo', 1001, 'quiet')
+
+    initDefault({ dsn: DSN, enabled: false })
+    await vi.waitFor(() => {
+      expect(isSentryReady()).toBe(true)
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(sentryCaptureMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('网络信息（公共字段）', () => {
   it('启动时拉取一次网络类型', async () => {
     configureMock({ handlers: { 'device.getNetwork': () => ({ type: 'wifi' }) } })
@@ -734,6 +829,12 @@ describe('uid：登录区间级假名（M1 修复：不再上报 token 片段，
     return String(recordsOf('error')[0].uid)
   }
 
+  // core 在登录态转为“无会话”时调用 adapter 的 `markSessionEnd`（core/src/auth.ts 的
+  // notifySessionEnd）；这里通过 adapter 原样调用，顺带证明 adapter 的接线。
+  function sessionEnd(): void {
+    toMonitorAdapter().markSessionEnd?.()
+  }
+
   it('同一 token 恒定：同一用户的多次上报落在同一个 uid 上', () => {
     expect(uidWithToken(TOKEN_A)).toBe(uidWithToken(TOKEN_A))
     // 取值定死：算法若变动会让线上用户整体重新分桶，必须显式改测试
@@ -788,12 +889,55 @@ describe('uid：登录区间级假名（M1 修复：不再上报 token 片段，
     expect(recordsOf('error')[2].uid).toMatch(/^u_[0-9a-f]{8}$/)
   })
 
-  it('已记录的取舍：两次上报之间发生的 A → null → B 观察不到，沿用旧假名', () => {
+  it('markSessionEnd 后换账号：新假名，且等于新 token 单独派生的值（不再串号）', () => {
+    const expectedB = uidWithToken(TOKEN_B)
+
+    resetMonitor()
+    initDefault()
+    useAuthStore().setToken(TOKEN_A)
+    captureError(new Error('account A'))
+    const uidA = String(recordsOf('error')[0].uid)
+    expect(uidA).toBe('u_8229f1ff')
+
+    // A 登出（core/src/auth.ts 的 applyAuthChange(null) 只 store.clear()，不 reload）
+    // → B 登录：previous === null，reload 分支不触发，只能靠 markSessionEnd 断开会话
+    useAuthStore().setToken(null)
+    sessionEnd()
+    useAuthStore().setToken(TOKEN_B)
+    captureError(new Error('account B'))
+
+    const uidB = String(recordsOf('error')[1].uid)
+    expect(uidB).not.toBe(uidA)
+    expect(uidB).toBe(expectedB)
+  })
+
+  it('同一 token 替换序列：只有中间经过 markSessionEnd 才换假名（刷新保持 / 换账号切换）', () => {
+    // 无 markSessionEnd = 401 刷新：同一用户保持同一假名
+    initDefault()
+    useAuthStore().setToken(TOKEN_A)
+    captureError(new Error('before refresh'))
+    useAuthStore().setToken(TOKEN_B)
+    captureError(new Error('after refresh'))
+    expect(recordsOf('error')[1].uid).toBe(recordsOf('error')[0].uid)
+
+    // 有 markSessionEnd = 换账号：必须换假名
+    resetMonitor()
+    initDefault()
+    useAuthStore().setToken(TOKEN_A)
+    captureError(new Error('account A'))
+    sessionEnd()
+    useAuthStore().setToken(TOKEN_B)
+    captureError(new Error('account B'))
+    expect(recordsOf('error')[1].uid).not.toBe(recordsOf('error')[0].uid)
+  })
+
+  it('已记录的取舍：没有 markSessionEnd 信号时，两次上报之间的 A → null → B 观察不到', () => {
     initDefault()
     useAuthStore().setToken(TOKEN_A)
     captureError(new Error('logged in'))
 
-    // 中间没有任何上报点：monitor 只在采集时读 token，看不到这段 null 窗口
+    // 中间没有任何上报点、也没有会话结束信号（例如还没升级到会调 markSessionEnd 的 core）：
+    // monitor 只在采集时读 token，看不到这段 null 窗口
     useAuthStore().setToken(null)
     useAuthStore().setToken(TOKEN_B)
     captureError(new Error('switched silently'))

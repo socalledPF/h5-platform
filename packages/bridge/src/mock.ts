@@ -214,24 +214,29 @@ async function mockToken(current: MockAdapter, method: string): Promise<TokenRes
 /**
  * mock 登录：写入一个每次登录都不同的 mock token。
  *
- * 只有「本次登录之前已经是一个真实会话、且新 token 不同」才推送 `auth.change`——
- * 那才是设计文档 6.1 的换账号分支（`@h5/core` 见到 token 变化会整页刷新）。
- * 首次登录（含占位身份之后、登出之后）是从「无账号」到「有账号」，推送会让浏览器里点一次登录就整页重载。
+ * 判定依据是「本次登录之前那个会话是不是真实会话」，而不是「之前是否存在 token」：
+ * 占位身份（`configureMock` 预置）之后的首次登录是从「无账号」到「有账号」，推送会让浏览器里
+ * 点一次登录就整页重载，故不推送；登出之后再登录虽然 previous 为 null，但 `@h5/core` 的重载条件
+ * 正是 `previous !== null && previous !== next`，这次推送不会被理解成换账号，却能把 core 里已经
+ * 清空的 token 纠正成新 token——不推就会让「登录成功后 UI 仍显示未登录」。
+ * 真实会话 → 真实会话（token 不同）才是设计文档 6.1 的换账号分支。
  */
 function mockLogin(): void {
   const previous = sessionToken
-  const hadRealSession = previous !== null && !sessionTokenIsPlaceholder
+  // 必须在覆写 token 之前读取：占位标记描述的是「覆写前」那个会话
+  const wasPlaceholder = sessionTokenIsPlaceholder
   loginSeq += 1
   sessionToken = `mock-login-${loginSeq}`
   sessionTokenIsPlaceholder = false
-  if (hadRealSession && previous !== sessionToken) emitAuthChange(sessionToken)
+  if (!wasPlaceholder && previous !== sessionToken) emitAuthChange(sessionToken)
 }
 
-/** mock 登出：清空 mock 登录态并推送 `auth.change`（载荷 token 为 null）。 */
+/** mock 登出：清空 mock 登录态；只有确实存在会话时才推送 `auth.change`（载荷 token 为 null）。 */
 function mockLogout(): void {
+  const hadSession = sessionToken !== null
   sessionToken = null
   sessionTokenIsPlaceholder = false
-  emitAuthChange(null)
+  if (hadSession) emitAuthChange(null)
 }
 
 function emitAuthChange(token: string | null): void {

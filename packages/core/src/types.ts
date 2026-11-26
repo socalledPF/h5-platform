@@ -48,6 +48,16 @@ export interface MonitorAdapter {
    */
   markFirstScreenApi?: () => void
   reportPerf?: (stage: string, durationMs: number) => void
+  /**
+   * 登录态从有到无（登出 / 会话结束，设计文档 6.1）。
+   *
+   * 监控侧应丢弃按用户派生的标识（如假名）：它是按「一段连续非空 token」缓存的，
+   * 不在这里作废，下一个账号登录后的错误就会顶着上一个账号的假名上报，跨账号串号。
+   * 下次登录会重新派生，因此这里不需要回传任何信息。
+   *
+   * 可选：未实现（或本来就不按用户派生标识）的监控实现无需关心。
+   */
+  markSessionEnd?: () => void
 }
 
 /** createH5App 的启动参数。 */

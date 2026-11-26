@@ -11,14 +11,14 @@
     "dev": "turbo run dev",
     "build": "turbo run build",
     "typecheck": "turbo run typecheck && pnpm typecheck:scripts && pnpm typecheck:workspaces",
-    "typecheck:workspaces": "turbo run typecheck --dry=json | node -e \"const fs=require('node:fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));const declared=new Set((p.tasks||[]).map(t=>t.package));const missing=(p.packages||[]).filter(n=>!declared.has(n));if(missing.length){console.error('[@h5/typecheck] 以下 workspace 没有 typecheck 脚本，turbo 会静默跳过：'+missing.join(', '));process.exit(1)}console.log('[@h5/typecheck] '+declared.size+'/'+p.packages.length+' 个 workspace 都声明了 typecheck（无静默跳过）')\"",
+    "typecheck:workspaces": "turbo run typecheck --dry=json | node -e \"const fs=require('node:fs');const p=JSON.parse(fs.readFileSync(0,'utf8'));const declared=new Set((p.tasks||[]).filter(t=>t.task==='typecheck'&&t.command!=='<NONEXISTENT>').map(t=>t.package));const missing=(p.packages||[]).filter(n=>!declared.has(n));if(missing.length){console.error('[@h5/typecheck] 以下 workspace 没有 typecheck 脚本，turbo 只会为它发一条 <NONEXISTENT> 任务后静默跳过：'+missing.join(', '));process.exit(1)}console.log('[@h5/typecheck] '+declared.size+'/'+p.packages.length+' 个 workspace 真正声明了 typecheck（无静默跳过）')\"",
     "lint": "eslint . --max-warnings 0",
     "lint:style": "stylelint \"**/*.{css,vue}\" --max-warnings 0",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run && turbo run test",
+    "test": "vitest run && pnpm test:workspaces && turbo run test",
     "test:coverage": "vitest run --coverage && pnpm coverage:packages",
-    "coverage:packages": "pnpm --filter @h5/bridge --filter @h5/core --filter @h5/monitor --filter @h5/hooks --filter @h5/ui exec vitest run --coverage",
+    "coverage:packages": "node -e \"const fs=require('node:fs'),path=require('node:path');const EXEMPT={'@h5/config':'只有 .mjs 工具配置与 tsconfig JSON，没有 src 源码可覆盖','@h5/styles':'纯 CSS 包，没有 JS 源码可覆盖'};const dirs=fs.readdirSync('packages').filter(d=>fs.existsSync(path.join('packages',d,'package.json'))).sort();const covered=[],exempt=[],unknown=[];for(const d of dirs){const dir=path.join('packages',d);const name=JSON.parse(fs.readFileSync(path.join(dir,'package.json'),'utf8')).name;const cfg=fs.readdirSync(dir).find(f=>/^vitest\\.config\\.(ts|mts|cts|js|mjs|cjs)$/.test(f));const hasCoverage=cfg!==undefined&&/coverage\\s*:/.test(fs.readFileSync(path.join(dir,cfg),'utf8'));if(hasCoverage)covered.push(name);else if(EXEMPT[name])exempt.push(name);else unknown.push(name+' ('+dir+')')}if(unknown.length){console.error('[@h5/coverage] 以下包既没有 vitest coverage 配置，也没有登记在豁免清单里 —— 新增共享包时覆盖率阈值会静默不执行：'+unknown.join(', '));process.exit(1)}console.log('[@h5/coverage] 参与覆盖率（由 packages/* 派生）：'+covered.join(', '));console.log('[@h5/coverage] 显式豁免：'+exempt.map(n=>n+'（'+EXEMPT[n]+'）').join('；'));const args=[];for(const n of covered)args.push('--filter',n);args.push('exec','vitest','run','--coverage');const r=require('node:child_process').spawnSync('pnpm',args,{stdio:'inherit',shell:process.platform==='win32'});process.exit(r.status===null?1:r.status)\"",
     "size:check": "node --experimental-strip-types scripts/check-bundle-size.ts",
     "clean": "rm -rf node_modules coverage .turbo apps/*/dist apps/*/coverage packages/*/dist packages/*/coverage",
     "create:app": "node --experimental-strip-types scripts/create-app.ts",
@@ -28,7 +28,8 @@
     "docs:preview": "vitepress preview docs",
     "prepare": "husky",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "test:workspaces": "turbo run test --dry=json | node -e \"const fs=require('node:fs'),path=require('node:path');const ZERO={'@h5/app-bridge-playground':'演示壳应用：只把 @h5/bridge 的 mock 拼成页面做手动联调，行为都在 packages/bridge/tests 覆盖','@h5/styles':'纯 CSS 包：产物是样式表，没有可断言的 JS 行为'};const p=JSON.parse(fs.readFileSync(0,'utf8'));const dirs=[...new Set((p.tasks||[]).filter(t=>t.task==='test'&&t.command!=='<NONEXISTENT>').map(t=>t.directory))];function count(dir){let n=0;const walk=d=>{for(const e of fs.readdirSync(d,{withFileTypes:true})){if(['node_modules','coverage','dist','.turbo'].includes(e.name))continue;const f=path.join(d,e.name);if(e.isDirectory())walk(f);else if(/\\.test\\.ts$/.test(e.name))n++}};if(fs.existsSync(dir))walk(dir);return n}const zero=[],bad=[];for(const dir of dirs){const name=JSON.parse(fs.readFileSync(path.join(dir,'package.json'),'utf8')).name;const c=count(dir);if(c===0){if(ZERO[name])zero.push(name);else bad.push(name+' ('+dir+')')}else console.log('[@h5/test] '+name+': '+c+' 个 *.test.ts')}if(zero.length)console.log('[@h5/test] 显式允许零测试：'+zero.map(n=>n+'（'+ZERO[n]+'）').join('；'));if(bad.length){console.error('[@h5/test] 以下 workspace 声明了 test 脚本却收集不到任何 *.test.ts —— --passWithNoTests 会照样 exit 0，测试就此静默消失：'+bad.join(', '));process.exit(1)}console.log('[@h5/test] 每个必须有测试的 workspace 都至少收集到 1 个测试文件')\""
   },
   "devDependencies": {
     "@commitlint/cli": "^21.2.4",

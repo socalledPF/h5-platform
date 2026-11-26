@@ -56,7 +56,7 @@ export async function createH5App(
   // 上报器必须早于第一次 Bridge 调用装上：initEnv → app.getInfo() 就是启动期的第一次调用，
   // 旧客户端（1001 方法不存在）或 800ms 超时（-1）都在这里发生。装晚了这些失败会落进
   // errorReporter === null 的空档被静默丢弃，§11.2 的兼容性指标于是系统性漏掉最老的客户端。
-  installBridgeErrorReporting(options)
+  const monitorInstall = installBridgeErrorReporting(options)
 
   await ready(READY_WAIT_MS)
   await initEnv({ appId: options.appId })
@@ -75,6 +75,7 @@ export async function createH5App(
   navMode.value = resolveNavMode()
 
   const app = createApp(rootComponent)
+  trackInstallLifecycle(app, monitorInstall)
   app.use(pinia)
   // 先装导航钩子再装 router：vue-router 的 install 会立刻发起落地导航，
   // 钩子若注册在它之后，落地路由可能在钩子到位前就结算，首屏于是漏掉 title / navMode 同步。
@@ -103,16 +104,22 @@ async function syncLandingRoute(current: Router): Promise<void> {
   syncCurrentRoute()
 }
 
-/** 等初始导航结算，最多等 `timeoutMs`；导航失败 / 超时都只是降级，不抛错。 */
+/** 等初始导航结算，最多等 `timeoutMs`；导航失败 / 超时 / 同步抛错都只是降级，不抛错。 */
 async function waitWithLimit(current: Router, timeoutMs: number): Promise<void> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
+    // `current.isReady()` 在数组字面量求值期间是**同步**执行的：手写路由器替身、HMR 换掉
+    // vue-router 实例、或防御性调用传了个坏 router 时它会当场抛错，异常会直接逃出
+    // syncLandingRoute → createH5App reject → main.ts 的 .then(mount) 不执行，
+    // 正好是上面注释要避免的永久白屏。因此整段 race 包在 try 里。
     await Promise.race([
       current.isReady().catch(() => undefined),
       new Promise<void>((resolve) => {
         timer = setTimeout(resolve, timeoutMs)
       }),
     ])
+  } catch {
+    // 降级：继续按 currentRoute 同步（syncCurrentRoute 仍是兜底）
   } finally {
     if (timer !== undefined) clearTimeout(timer)
   }
@@ -134,24 +141,73 @@ function shouldPreinstallMock(options: CreateH5AppOptions): boolean {
 }
 
 /**
+ * 上报器 / monitor adapter 是**进程级单槽**，所以「装」和「清」都必须有主：
+ * 每次 createH5App 启动都留下一份安装记录，`live` 由返回的 App 的挂载 / 卸载维护。
+ * 只有确认页面上没有别的「已挂载、仍在跑」的实例时，才允许把槽位清空（见 installBridgeErrorReporting）。
+ */
+interface MonitorInstall {
+  /** 返回的 App 已挂载且未卸载：说明这个应用还在页面上跑。 */
+  live: boolean
+}
+
+const monitorInstalls = new Set<MonitorInstall>()
+
+/**
  * Bridge 失败上报与埋点 adapter（设计文档 11.2）：adapter 由业务传入，core 不 import @h5/monitor。
  *
  * 只做「接上」这件事，不做 `init`：这一步必须早于第一次 Bridge 调用，
  * 而 `init` 需要 initEnv 之后才有值的 env 快照。
  */
-function installBridgeErrorReporting(options: CreateH5AppOptions): void {
+function installBridgeErrorReporting(options: CreateH5AppOptions): MonitorInstall {
   const monitor = options.monitor
+  const install: MonitorInstall = { live: false }
   if (monitor === undefined) {
-    // 同一次页面生命周期里可能二次启动（微前端重挂、单测）：上一轮的 reporter / adapter 会
-    // 闭包住旧的 monitor 实例，不清掉就会被当成这次启动的实现，上报与埋点串进上一份配置。
-    setBridgeErrorReporter(null)
-    setMonitorAdapter(undefined)
-    return
+    // 只清「没有主」的槽位：同一次页面生命周期里可能二次启动（微前端重挂、单测），上一轮的
+    // reporter / adapter 会闭包住旧 monitor 实例，不清就会串进这次的配置；但同页并存的另一个
+    // H5 应用（微前端共存，不是顺序重挂）也可能正把 reporter / adapter 装在这个槽上，而它早已
+    // 从 createH5App 返回，被摘掉后永远收不到 Bridge 失败。因此只在没有存活实例占用时清空：
+    // 顺序重启（旧实例已卸载或从未挂载，例如单测）照旧清掉，不继承上一轮的 reporter。
+    if (!hasLiveMonitorInstall()) {
+      setBridgeErrorReporter(null)
+      setMonitorAdapter(undefined)
+    }
+    return install
   }
+  // 只有装过监控的实例进登记表：没装的实例不可能占着槽位，也不该让后来的实例为它让路。
+  monitorInstalls.add(install)
   setMonitorAdapter(monitor)
   setBridgeErrorReporter((method, code, msg) => {
     monitor.reportBridgeError?.(method, code, msg)
   })
+  return install
+}
+
+/** 页面上是否还有已挂载、仍在跑的实例装着监控（本次安装还没挂载，不会算进来）。 */
+function hasLiveMonitorInstall(): boolean {
+  for (const install of monitorInstalls) {
+    if (install.live) return true
+  }
+  return false
+}
+
+/**
+ * 把安装记录挂到返回的 App 上：挂载即「存活」，卸载即释放。
+ *
+ * core 没有别的时机能知道一个 H5 应用是否还在页面上跑，而「清空单槽」正是需要这个信息
+ * （见 installBridgeErrorReporting）。包装只透传返回值和参数，不改变 App 的行为。
+ */
+function trackInstallLifecycle(app: App<Element>, install: MonitorInstall): void {
+  const mount = app.mount
+  app.mount = ((...args: Parameters<App<Element>['mount']>) => {
+    install.live = true
+    return mount.apply(app, args)
+  }) as App<Element>['mount']
+  const unmount = app.unmount
+  app.unmount = ((...args: Parameters<App<Element>['unmount']>) => {
+    install.live = false
+    monitorInstalls.delete(install)
+    return unmount.apply(app, args)
+  }) as App<Element>['unmount']
 }
 
 /**
@@ -261,6 +317,7 @@ function buildMockAdapter(options: CreateH5AppOptions, current: AppEnv): Partial
 export function resetCreateAppState(): void {
   for (const unsubscribe of unsubscribers) unsubscribe()
   unsubscribers.length = 0
+  monitorInstalls.clear()
   setBridgeErrorReporter(null)
   setMonitorAdapter(undefined)
 }

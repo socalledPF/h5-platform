@@ -66,26 +66,26 @@ pnpm --filter @h5/app-member dev
 
 以下全部来自根 `package.json` 的 `scripts`：
 
-| 脚本                     | 命令                                                    | 用途                                                                    |
-| ------------------------ | ------------------------------------------------------- | ----------------------------------------------------------------------- |
-| `pnpm dev`               | `turbo run dev`                                         | 并行启动所有应用的 dev server，改代码热更新                             |
-| `pnpm build`             | `turbo run build`                                       | 构建所有应用（先跑依赖包的 typecheck），产物在 `apps/*/dist`            |
-| `pnpm typecheck`         | `turbo run typecheck && pnpm typecheck:scripts`         | 全仓库类型检查，含 `scripts/**`                                         |
-| `pnpm typecheck:scripts` | `tsc -p tsconfig.scripts.json`                          | 只检查 `scripts/**` 与 `playwright.config.ts`                           |
-| `pnpm lint`              | `eslint . --max-warnings 0`                             | JS/TS/Vue 规范与依赖边界检查，任何 warning 都算失败                     |
-| `pnpm lint:style`        | `stylelint "**/*.{css,vue}" --max-warnings 0`           | 样式规范检查                                                            |
-| `pnpm test`              | `vitest run && turbo run test`                          | 先跑仓库级单测，再跑各包/应用的测试                                     |
-| `pnpm test:coverage`     | `vitest run --coverage`                                 | 带覆盖率跑仓库级单测                                                    |
-| `pnpm e2e`               | `playwright test`                                       | Playwright 关键流程，自带 member 的 dev server（mock 模式）             |
-| `pnpm format`            | `prettier --write .`                                    | 按 `.prettierrc.json` 全量格式化                                        |
-| `pnpm format:check`      | `prettier --check .`                                    | 只检查不修改，CI 风格                                                   |
-| `pnpm clean`             | `rm -rf node_modules coverage .turbo apps/*/dist …`     | 清理依赖与产物（不删源码）                                              |
-| `pnpm create:app <name>` | `node --experimental-strip-types scripts/create-app.ts` | 新建业务应用（见下节）                                                  |
-| `pnpm run deploy`            | `node --experimental-strip-types scripts/deploy.ts`     | 发布到 CDN（默认 dry-run，见 [docs/deployment.md](docs/deployment.md)） |
-| `pnpm docs:dev`          | `vitepress dev docs`                                    | 本地预览文档站，`docs/` 就是站点根目录                                  |
-| `pnpm docs:build`        | `vitepress build docs`                                  | 构建静态文档站到 `docs/.vitepress/dist`（含死链检查）                   |
-| `pnpm docs:preview`      | `vitepress preview docs`                                | 本地预览 `docs:build` 的产物                                            |
-| `pnpm prepare`           | `husky`                                                 | 安装 git hooks（`prepare` 后自动执行）                                  |
+| 脚本                     | 命令                                                                         | 用途                                                                                   |
+| ------------------------ | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `pnpm dev`               | `turbo run dev`                                                              | 并行启动所有应用的 dev server，改代码热更新                                            |
+| `pnpm build`             | `turbo run build`                                                            | 构建所有应用（先跑依赖包的 typecheck），产物在 `apps/*/dist`                           |
+| `pnpm typecheck`         | `turbo run typecheck && pnpm typecheck:scripts && pnpm typecheck:workspaces` | 全仓库类型检查，含 `scripts/**`；末尾的计数断言确保没有 workspace 被静默跳过           |
+| `pnpm typecheck:scripts` | `tsc -p tsconfig.scripts.json`                                               | 只检查 `scripts/**` 与 `playwright.config.ts`                                          |
+| `pnpm lint`              | `eslint . --max-warnings 0`                                                  | JS/TS/Vue 规范与依赖边界检查，任何 warning 都算失败                                    |
+| `pnpm lint:style`        | `stylelint "**/*.{css,vue}" --max-warnings 0`                                | 样式规范检查                                                                           |
+| `pnpm test`              | `vitest run && turbo run test`                                               | 先跑仓库级单测，再跑各包/应用的测试                                                    |
+| `pnpm test:coverage`     | `vitest run --coverage && pnpm coverage:packages`                            | 带覆盖率跑仓库级单测 + 五个共享包的 80% 阈值                                           |
+| `pnpm e2e`               | `playwright test`                                                            | Playwright 关键流程，自带 member/activity 两个 dev server（mock 模式，端口 5273/5274） |
+| `pnpm format`            | `prettier --write .`                                                         | 按 `.prettierrc.json` 全量格式化                                                       |
+| `pnpm format:check`      | `prettier --check .`                                                         | 只检查不修改，CI 风格                                                                  |
+| `pnpm clean`             | `rm -rf node_modules coverage .turbo apps/*/dist …`                          | 清理依赖与产物（不删源码）                                                             |
+| `pnpm create:app <name>` | `node --experimental-strip-types scripts/create-app.ts`                      | 新建业务应用（见下节）                                                                 |
+| `pnpm run deploy`        | `node --experimental-strip-types scripts/deploy.ts`                          | 发布到 CDN（默认 dry-run，见 [docs/deployment.md](docs/deployment.md)）                |
+| `pnpm docs:dev`          | `vitepress dev docs`                                                         | 本地预览文档站，`docs/` 就是站点根目录                                                 |
+| `pnpm docs:build`        | `vitepress build docs`                                                       | 构建静态文档站到 `docs/.vitepress/dist`（含死链检查）                                  |
+| `pnpm docs:preview`      | `vitepress preview docs`                                                     | 本地预览 `docs:build` 的产物                                                           |
+| `pnpm prepare`           | `husky`                                                                      | 安装 git hooks（`prepare` 后自动执行）                                                 |
 
 ## 新建业务
 
@@ -127,7 +127,7 @@ pnpm create:app order --dry-run  # 只看文件计划与文案替换，不写文
 本地与 CI 必须全绿：
 
 ```bash
-pnpm typecheck && pnpm lint && pnpm lint:style && pnpm test && pnpm build && pnpm docs:build
+pnpm typecheck && pnpm lint && pnpm lint:style && pnpm test && pnpm build && pnpm size:check && pnpm docs:build
 ```
 
 CI 在 `.github/workflows/ci.yml`，顺序为 Install（`--frozen-lockfile`）→ Typecheck → Lint → Lint styles → Test → Build → Docs build。PR 还要求：共享包单测覆盖率 ≥ 80%、修改 `packages/*` 需平台负责人审批（见 [docs/development.md](docs/development.md)）。
@@ -144,7 +144,7 @@ CI 在 `.github/workflows/ci.yml`，顺序为 Install（`--frozen-lockfile`）�
 ## 常见问题
 
 **不在 App 里怎么开发？**
-直接 `pnpm dev`，浏览器打开 `http://localhost:5173`。此时 `env.isApp === false`，`@h5/bridge` 把调用路由到 mock 层（token 读本地 env、`nav.*` 转普通路由跳转、`ui.toast` 用 Vant Toast），业务代码不需要任何改动。
+直接 `pnpm dev`，浏览器打开 `http://localhost:5173`。此时 `env.isApp === false`，`@h5/bridge` 把调用路由到 mock 层（token 来自 mock 会话、`nav.*` 转普通路由跳转、`ui.toast` 走 `console.info`，由 core 注入），业务代码不需要任何改动。
 
 **怎么打开 vConsole？**
 test 环境默认注入；pre 环境在 URL 上加 `?debug=1` 注入；prod 不打包 vConsole。详见 [docs/deployment.md](docs/deployment.md) 的四环境对照表。

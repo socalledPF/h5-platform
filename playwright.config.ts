@@ -10,8 +10,13 @@ const ACTIVITY_PORT = 5274
  * 若复用已占用端口，Playwright 会静默连上**别人家的应用**，测试绿/红都失去意义（真实踩过）。
  */
 const MEMBER_BASE_URL = `http://127.0.0.1:${MEMBER_PORT}`
-/** activity 是独立入口的应用：必须一起起来，否则活动页用例会被跳过，等于没测。 */
-const ACTIVITY_BASE_URL = `http://127.0.0.1:${ACTIVITY_PORT}`
+/**
+ * activity 是独立入口的应用：必须一起起来，否则活动页用例会被跳过，等于没测。
+ *
+ * 导出：e2e/smoke.spec.ts 从这里 import，端口只在上面 `ACTIVITY_PORT` 一处定义；
+ * 之前 spec 里另写了一份 `http://127.0.0.1:5274`，改端口时两处会悄悄不同步。
+ */
+export const ACTIVITY_BASE_URL = `http://127.0.0.1:${ACTIVITY_PORT}`
 
 /**
  * 浏览器渠道兜底（可选，默认不需要）。

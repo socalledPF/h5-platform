@@ -142,6 +142,76 @@ describe('AppNavBar / 原生模式', () => {
   })
 })
 
+describe('AppNavBar / 运行期模式迁移', () => {
+  it('native → h5 时通知原生清空标题与右侧按钮，避免留下旧标题与死按钮', async () => {
+    const wrapper = mount(AppNavBar, {
+      props: { title: '我的订单', right: [HELP], mode: 'native' },
+    })
+    bridgeMock.setTitle.mockClear()
+    bridgeMock.setRightButtons.mockClear()
+
+    await wrapper.setProps({ mode: 'h5' })
+
+    expect(bridgeMock.setTitle).toHaveBeenCalledWith('')
+    expect(bridgeMock.setRightButtons).toHaveBeenCalledWith([])
+    expect(wrapper.find('.app-nav-bar--h5').exists()).toBe(true)
+  })
+
+  it('h5 → none 时不动原生导航栏（h5 模式没往原生发过东西）', async () => {
+    const wrapper = mount(AppNavBar, {
+      props: { title: '我的订单', right: [HELP], mode: 'h5' },
+    })
+    bridgeMock.setTitle.mockClear()
+    bridgeMock.setRightButtons.mockClear()
+
+    await wrapper.setProps({ mode: 'none' })
+
+    expect(bridgeMock.setTitle).not.toHaveBeenCalled()
+    expect(bridgeMock.setRightButtons).not.toHaveBeenCalled()
+  })
+})
+
+describe('AppNavBar / 内容指纹', () => {
+  const BASE: NavBarButton = { id: 'help', text: '帮助', icon: 'question' }
+
+  // 三个用例各改一个已声明字段：任何字段漏进指纹都会让对应用例失败
+  it('text 变化时重新同步', async () => {
+    const wrapper = mount(AppNavBar, { props: { title: '我的订单', right: [{ ...BASE }] } })
+    bridgeMock.setRightButtons.mockClear()
+
+    await wrapper.setProps({ right: [{ ...BASE, text: '帮助中心' }] })
+
+    expect(bridgeMock.setRightButtons).toHaveBeenCalledWith([{ ...BASE, text: '帮助中心' }])
+  })
+
+  it('icon 变化时重新同步', async () => {
+    const wrapper = mount(AppNavBar, { props: { title: '我的订单', right: [{ ...BASE }] } })
+    bridgeMock.setRightButtons.mockClear()
+
+    await wrapper.setProps({ right: [{ ...BASE, icon: 'share' }] })
+
+    expect(bridgeMock.setRightButtons).toHaveBeenCalledWith([{ ...BASE, icon: 'share' }])
+  })
+
+  it('icon 从有到无时重新同步', async () => {
+    const wrapper = mount(AppNavBar, { props: { title: '我的订单', right: [{ ...BASE }] } })
+    bridgeMock.setRightButtons.mockClear()
+
+    await wrapper.setProps({ right: [{ id: 'help', text: '帮助' }] })
+
+    expect(bridgeMock.setRightButtons).toHaveBeenCalledWith([{ id: 'help', text: '帮助' }])
+  })
+
+  it('id 变化时重新同步', async () => {
+    const wrapper = mount(AppNavBar, { props: { title: '我的订单', right: [{ ...BASE }] } })
+    bridgeMock.setRightButtons.mockClear()
+
+    await wrapper.setProps({ right: [{ ...BASE, id: 'help-v2' }] })
+
+    expect(bridgeMock.setRightButtons).toHaveBeenCalledWith([{ ...BASE, id: 'help-v2' }])
+  })
+})
+
 describe('AppNavBar / H5 模式', () => {
   it('渲染标题、返回按钮与右侧文字按钮，且不调用原生导航栏', () => {
     navMode.value = 'h5'

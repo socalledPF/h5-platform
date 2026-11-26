@@ -111,9 +111,11 @@ export function canIUse(method: BridgeMethod): boolean {
 }
 
 /**
- * 仅供测试：清空能力缓存与隐式探测预算。
+ * 清空能力缓存与隐式探测预算（已从 `@h5/bridge` 入口导出，业务可直接调用）。
  *
- * 同时把失败次数与「已上报」标记清零，因此也为「回到前台重新探测」这类场景保留了唯一的重置入口。
+ * 隐式探测有失败预算上限：旧客户端连续失败到上限后 `warmCapabilities()` 不再发起探测。
+ * 本函数把失败次数、缓存与「已上报」标记一起清零，是「回到前台重新探测」「App 升级后重连」
+ * 这两类场景唯一的重置入口——不调用它，整个页面生命周期内 `canIUse()` 都不会再重新探测。
  */
 export function resetCapabilities(): void {
   cachedCapabilities = null

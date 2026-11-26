@@ -21,6 +21,10 @@ const ENVIRONMENTS = ['dev', 'test', 'pre', 'prod'] as const
 /** 默认发到 test：忘记写 --env 时绝不能落到线上，prod 必须显式指定。 */
 const DEFAULT_ENVIRONMENT = 'test'
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/
+/** 换行 / 制表符等控制字符会把一条命令截成两条，任何要进 shell 的值都先拒绝。 */
+const CONTROL_CHAR_PATTERN = /[\u0000-\u001f\u007f]/
+/** {dest} 必须是 https URL（域 + 可选端口 + 路径），只放行 URL 安全字符：空格 / 引号 / ; & $ ` 一律不认。 */
+const DEST_PATTERN = /^https:\/\/[A-Za-z0-9.-]+(?::\d{1,5})?(\/[A-Za-z0-9._~/%+-]*)?$/
 /** 应用名会被拼进 CDN 路径与上传命令字符串，与 create-app 同名规则，挡住 ../ 与 shell 元字符。 */
 const APP_NAME_PATTERN = /^[a-z][a-z0-9-]{1,30}$/
 /** 拒绝发布时最多列出多少条未提交改动，避免刷屏。 */
@@ -561,6 +565,63 @@ function printCachePlan(entryBase: string, cdnBase: string, release: string): vo
   )
 }
 
+/**
+ * POSIX 单引号里表示一个单引号：先关引号、转义一个单引号、再开引号。
+ *
+ * UPLOAD_CMD 是用户提供的 shell 文本（脚本只认 {src} {dest} 两个占位符），所以仍然用
+ * execSync(string) 执行；但替换进去的每个值都先过 shellQuote，值里的空格 ; && $() '
+ * " 换行都只是字面量，不会变成命令。
+ */
+const SHELL_ESCAPED_QUOTE = "'\\''"
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", SHELL_ESCAPED_QUOTE)}'`
+}
+
+/** 控制字符（换行 / 制表符 / NUL）会把命令截成两条，一律拒绝。 */
+function assertNoControlChars(label: string, value: string): void {
+  if (CONTROL_CHAR_PATTERN.test(value)) {
+    throw new CliError(
+      `${label} 含控制字符（换行 / 制表符等），拒绝拼进上传命令：${JSON.stringify(value)}`,
+    )
+  }
+}
+
+/** {src} 只允许是本应用的 dist 目录，别把任意路径交给 UPLOAD_CMD。 */
+function assertDistSource(app: string, distDir: string): void {
+  const expected = join(APPS_DIR, app, 'dist')
+  if (resolve(distDir) !== resolve(expected)) {
+    throw new CliError(`上传源 ${distDir} 不是 apps/${app}/dist，拒绝拼进上传命令。`)
+  }
+  assertNoControlChars('上传源 {src}', distDir)
+}
+
+/** {dest} 只允许是 https URL：挡住 shell 元字符，也挡住 DEPLOY_CDN_HOST 覆盖带来的怪值。 */
+function assertDestUrl(dest: string): void {
+  assertNoControlChars('上传目标 {dest}', dest)
+  if (!DEST_PATTERN.test(dest)) {
+    throw new CliError(
+      `上传目标 ${dest} 不是合法的 https URL（可能来自 package.json version 或 ` +
+        'DEPLOY_CDN_HOST 覆盖），拒绝拼进上传命令。',
+    )
+  }
+}
+
+/**
+ * 展开 UPLOAD_CMD 模板：先校验 {src} / {dest}，再用单引号转义后一次性替换。
+ * 一次正则替换而不是两次 replaceAll，避免 src 里恰好含 "{dest}" 时被二次展开。
+ */
+function buildUploadCommand(
+  template: string,
+  context: { app: string; distDir: string; cdnBase: string },
+): string {
+  assertDistSource(context.app, context.distDir)
+  assertDestUrl(context.cdnBase)
+  return template.replace(/\{(?:src|dest)\}/g, (placeholder) =>
+    shellQuote(placeholder === '{src}' ? context.distDir : context.cdnBase),
+  )
+}
+
 function printReleaseSteps(context: {
   release: string
   entryIndex: string
@@ -646,6 +707,14 @@ function main(argv: string[]): number {
   const env = options.env
   const { name: packageName, version: manifestVersion } = readManifest(appDir)
   const version = options.version ?? manifestVersion
+  // package.json 的 version 和 --version 一样会进 CDN 路径与上传命令，必须用同一把尺子校验；
+  // 否则一个被改过的 package.json 就能把 "1.0.0;rm -rf ~" 这类值带进 shell。
+  if (options.version === null && !VERSION_PATTERN.test(version)) {
+    throw new CliError(
+      `apps/${app}/package.json 的 version "${version}" 不合法（格式：x.y.z 或 x.y.z-tag）。\n` +
+        '版本号会被拼进 CDN 路径与上传命令，先修正 package.json，或用 --version 指定合法版本。',
+    )
+  }
 
   // 两条 S1 守卫在 dry-run 里也执行（很便宜，而且正是 dry-run 最该暴露的问题）。
   const guardWarnings: string[] = []
@@ -698,7 +767,7 @@ function main(argv: string[]): number {
 
   const template = process.env.UPLOAD_CMD ?? ''
   const uploadCommand =
-    template === '' ? null : template.replaceAll('{src}', distDir).replaceAll('{dest}', cdnBase)
+    template === '' ? null : buildUploadCommand(template, { app, distDir, cdnBase })
 
   printReleaseSteps({ release, entryIndex, versionedHtml, uploadCommand })
   printReleaseRecord({ app, release, hash })

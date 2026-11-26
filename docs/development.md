@@ -31,12 +31,12 @@ pnpm e2e     # 自动起 member(5273) 与 activity(5274) 两个 dev server，跑
 
 - **在 App 内**：`invoke()` 把 `{ method, params, callbackId, version }` 通过原生通道发出去，等 `window.__H5Bridge.callback()` 回调；超时 reject `-1`。
 - **不在 App 内**：`invoke()` 直接路由到 mock 实现，返回同为 `{ code, data, msg }` 结构的数据：
-  - `auth.getToken` 读本地 `.env.local` 里的假 token；`auth.login` 直接 resolve
+  - `auth.getToken` 读 mock **会话** token（`configureMock()` 播种的占位值，登录后为 `mock-login-<n>`），退出登录后以 `1004` 拒绝，用于演练未登录分支；`auth.login` 写入新 token
   - `nav.open` / `nav.close` / `nav.back` 转成普通路由跳转或 `history.back()`
   - `ui.toast` / `ui.loading` / `ui.alert` 用 Vant 实现，观感与原生接近
   - `app.getInfo` 返回构造出来的 App 版本、系统、状态栏高度，方便验证适配分支
 
-因为业务只调用 `@h5/bridge` 导出的有类型 API，**业务代码一行都不用改**就能在浏览器里跑通全流程；Playwright E2E 也跑在这套 mock 上（`pnpm e2e`，自带 member 的 dev server）。
+因为业务只调用 `@h5/bridge` 导出的有类型 API，**业务代码一行都不用改**就能在浏览器里跑通全流程；Playwright E2E 也跑在这套 mock 上（`pnpm e2e`，自带 member 与 activity 两个 dev server，端口 5273/5274）。
 
 要点：
 
@@ -89,13 +89,13 @@ husky 装了两个钩子（`pnpm install` 时 `prepare` 自动安装）：
 本地提交 PR 前跑一遍：
 
 ```bash
-pnpm typecheck && pnpm lint && pnpm lint:style && pnpm test && pnpm build
+pnpm typecheck && pnpm lint && pnpm lint:style && pnpm test && pnpm test:coverage && pnpm build && pnpm size:check
 ```
 
 - CI（`.github/workflows/ci.yml`）顺序相同：Install（`--frozen-lockfile`）→ Typecheck → Lint → Lint styles → Test → Build，node 24 + pnpm 12。
 - `pnpm lint` 带 `--max-warnings 0`，**warning 也算失败**。
 - **共享包单测覆盖率 ≥ 80%**（§12.4）：改了 `packages/*` 必须补测试，覆盖率按包看。
-- 包体积预算：`ANALYZE=1 pnpm --filter @h5/app-xxx build` 产出 `dist/stats.html`，入口体积超预算时在评审里说明（预算数值由各业务在评审时确定）。
+- 包体积预算：`pnpm size:check` 按 `scripts/check-bundle-size.ts` 的 `BUDGETS` 逐 app 校验，**超预算直接阻断**（exit 1）；`ANALYZE=1 pnpm --filter @h5/app-xxx build` 可产出 `dist/stats.html` 用于分析。改预算是一件事，但要和实测一起在评审里说明。
 - 修改 `packages/*` 的 PR 需要至少一名平台负责人审批。
 - 发布前在 test 环境用双端测试包各走一遍关键流程：打开、登录态、导航返回、分享。
 
@@ -128,7 +128,7 @@ Bridge 协议文档是唯一来源：`docs/bridge-protocol.md`，每个方法必
 - **需要固定像素时用大写 `PX`**（插件只匹配小写 `px`）：1px 细线、平板上限宽等场景。
 - 也可以用 `selectorBlackList` 里的 `.ignore-vw` / `.no-vw` class 让整个选择器跳过转换。
 - 平板 / 折叠屏：根容器 `max-width: 600px; margin: 0 auto`，避免内容被无限放大——**注意 `600px` 会被转成 vw 而失效，这种固定尺寸要写成 `600PX` 或加 `.ignore-vw`**。
-- 1px 细线统一用伪元素 + `transform: scaleY(0.5)` 的 mixin，不要直接写 border。
+- 1px 细线用 `@h5/styles` 里的 `.hairline-*` 工具类（`packages/styles/src/utilities.css`，伪元素 + `transform: scaleY(0.5)`），不要直接写 `border: 1px`；仓库没有 CSS 预处理器，因此不是 mixin。
 - 安全区用 CSS 变量：`--safe-top: env(safe-area-inset-top, 0px)`、`--safe-bottom: env(safe-area-inset-bottom, 0px)`；底部固定按钮 / Tabbar 统一 `padding-bottom: var(--safe-bottom)`。Android 个别机型 `env()` 不生效，用 `app.getInfo().statusBarHeight` 兜底。
 - `viewport` meta 固定为 `width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover`。
 
@@ -149,7 +149,7 @@ Bridge 协议文档是唯一来源：`docs/bridge-protocol.md`，每个方法必
 ## 10. 常见问题
 
 **改完 `packages/*` 业务没生效？**
-走 `workspace:*` 本地链接，源码即产物，重启对应 dev server 即可；如果 turbo 缓存了旧结果，用 `pnpm --filter @h5/app-xxx dev` 单独起。
+走 `workspace:*` 本地链接，源码即产物，重启对应 dev server 即可。`dev` 任务在 `turbo.json` 里是 `cache: false`，不会被 turbo 缓存；若怀疑 `build` / `typecheck` / `test` 用了陈旧缓存，用 `pnpm exec turbo run <task> --force` 强制重跑。
 
 **`pnpm typecheck` 过了但 `vite build` 报 `__APP_ID__` 未定义？**
 这些常量由 `@h5/config/vite` 注入，应用的 `vite.config.ts` 必须调用 `createAppViteConfig({ appId: '<name>' })`；脚手架已经生成好，手写配置时容易漏。
@@ -160,7 +160,7 @@ Bridge 协议文档是唯一来源：`docs/bridge-protocol.md`，每个方法必
 **为什么我的 `px` 没被转成 vw？**
 大写 `PX` 会跳过转换；另外 `minPixelValue: 1` 意味着小于 1px 的值不转，选择器命中 `.ignore-vw` / `.no-vw` 时整个选择器都不转。
 
-## 10. 实现与设计方案的差异
+## 11. 实现与设计方案的差异
 
 `docs/architecture.md` 是**逐字存档**的原始设计方案（与评审时的附件逐字节一致，不要修改它）。
 实现过程中有意偏离方案的地方统一记在这里，避免"改文档去迎合实现"。
@@ -176,5 +176,6 @@ Bridge 协议文档是唯一来源：`docs/bridge-protocol.md`，每个方法必
 | 导航栈深度              | §7.3：按 push/replace/back 记录          | 取 `history.state.position` 相对基准的差值                            | 与浏览器前进/后退天然一致，避免自己维护栈与真实历史脱节                                         |
 | e2e 端口                | —                                        | 专用 5273 / 5274，禁止复用已占用端口                                  | 5173/5174 常被本机其它项目占用，复用会静默测到别的应用                                          |
 | `@playwright/test` 版本 | —                                        | 固定 `~1.61.0`                                                        | 1.62 起 Playwright 不再为 macOS 12 发布 chromium 产物                                           |
+| `ANALYZE` 可视化        | §10.3：构建产出体积分析                  | `ANALYZE=1` 只生成本地 `dist/stats.html`                              | 分析产物不进 CI；门禁由 `pnpm size:check` 承担，两者分工明确                                    |
 
 **尚未在真机验证的差异**：`overscroll: contain` 与 `-webkit-overflow-scrolling: touch` 组合下，旧 iOS（≤12）里滚动层内的 `position: fixed` 后代是否漂移。上真机时应优先复验 activity 的底部 CTA 与 member 页的固定栏。

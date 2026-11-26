@@ -9,7 +9,7 @@ import { h } from 'vue'
 import { useAuthStore } from '../src/auth'
 import { createH5App, resetCreateAppState } from '../src/create-app'
 import { env } from '../src/env'
-import { markFirstScreen, resetMonitorState } from '../src/monitor'
+import { getMonitorAdapter, markFirstScreen, resetMonitorState } from '../src/monitor'
 import {
   installNavigation,
   navMode,
@@ -353,6 +353,33 @@ describe('落地路由同步（设计文档 7.2：首屏必须同步 title / nav
       expect.objectContaining({ source: 'white-screen', selector: '#app' }),
     )
   })
+
+  it('isReady() 同步抛错时启动不挂死，白屏检测仍然装上', async () => {
+    vi.useFakeTimers()
+    const monitor = createMonitorSpy()
+    const router = createTestRouter()
+    // 手写路由器替身 / HMR 换掉 vue-router 实例时 isReady 是当场抛错，而不是返回 rejected Promise
+    router.isReady = () => {
+      throw new Error('router broken')
+    }
+
+    const pending = createH5App(EmptyRoot, {
+      appId: 'member',
+      router,
+      monitor,
+      firstScreenSelector: '#app',
+    })
+    // 同步抛错没被兜住时这里永远不会 resolve：下面的断言就是回归点
+    await vi.advanceTimersByTimeAsync(1_000)
+    const app = await pending
+    app.mount(prepareDocument())
+
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(monitor.captureError).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ source: 'white-screen', selector: '#app' }),
+    )
+  })
 })
 
 describe('白屏检测（设计文档 11.2）', () => {
@@ -645,5 +672,46 @@ describe('启动期 Bridge 失败上报（设计文档 11.2：兼容性指标不
     await expect(invoke('unknown.method')).rejects.toMatchObject({ code: 1001 })
 
     expect(stale.reportBridgeError).not.toHaveBeenCalled()
+  })
+})
+
+describe('进程级单槽的属主（同页并存 / 顺序重启）', () => {
+  it('A 带监控且已挂载时，B 不带监控启动不摘掉 A 的上报器与 adapter', async () => {
+    const monitorA = createMonitorSpy()
+    const appA = await createH5App(Root, {
+      appId: 'member',
+      router: createTestRouter(),
+      monitor: monitorA,
+    })
+    appA.mount(prepareDocument())
+
+    // 同页并存的另一个应用（微前端共存，不是顺序重挂）：A 早已从 createH5App 返回，
+    // 被摘掉后永远收不到 Bridge 失败，因此 B 的清空必须让位给仍在跑的 A。
+    await createH5App(Root, { appId: 'order', router: createTestRouter() })
+
+    await expect(invoke('unknown.method')).rejects.toMatchObject({ code: 1001 })
+    expect(monitorA.reportBridgeError).toHaveBeenCalledWith(
+      'unknown.method',
+      1001,
+      expect.anything(),
+    )
+    expect(getMonitorAdapter()).toBe(monitorA)
+  })
+
+  it('A 卸载后再启动不带监控的 B：不继承 A 的 reporter', async () => {
+    const monitorA = createMonitorSpy()
+    const appA = await createH5App(Root, {
+      appId: 'member',
+      router: createTestRouter(),
+      monitor: monitorA,
+    })
+    appA.mount(prepareDocument())
+    appA.unmount()
+
+    await createH5App(Root, { appId: 'order', router: createTestRouter() })
+    await expect(invoke('unknown.method')).rejects.toMatchObject({ code: 1001 })
+
+    expect(monitorA.reportBridgeError).not.toHaveBeenCalled()
+    expect(getMonitorAdapter()).toBeUndefined()
   })
 })

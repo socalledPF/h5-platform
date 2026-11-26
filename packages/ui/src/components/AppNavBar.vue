@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { nav as bridgeNav, on as onBridgeEvent } from '@h5/bridge'
 import { goBack, navMode } from '@h5/core'
-import type { NavBarButton } from '@h5/bridge'
+import type { NavBarButton, NavMode } from '@h5/bridge'
 import type { AppNavBarProps } from '../types'
 import { safeInsetValue } from '../safe-area'
 
@@ -30,9 +30,16 @@ const safeTop = ref(props.immersive ? '0px' : safeInsetValue('top'))
 /** 自己发布过哪些按钮，原生回调里只转发生效的那些。 */
 const publishedIds = new Set<string>()
 let unsubscribe: (() => void) | undefined
+/** 上一轮同步时的生效模式，用来识别运行期 native → h5/none 的迁移。 */
+let lastMode: NavMode | undefined
 
 function ignoreBridgeFailure(): void {
   // 浏览器 / 原生未实现该方法时静默降级，不能让一次 setTitle 失败影响渲染
+}
+
+function clearNativeBar(): void {
+  void bridgeNav.setTitle('').catch(ignoreBridgeFailure)
+  void bridgeNav.setRightButtons([]).catch(ignoreBridgeFailure)
 }
 
 function refreshSafeTop(): void {
@@ -40,8 +47,17 @@ function refreshSafeTop(): void {
 }
 
 function syncNativeBar(): void {
+  const mode = resolvedMode.value
+  const wasNative = lastMode === 'native'
+  lastMode = mode
   publishedIds.clear()
-  if (resolvedMode.value !== 'native') return
+
+  if (mode !== 'native') {
+    // 运行期从 native 切走：原生栏是本组件发布的，不清空会留下旧标题和点不动的按钮。
+    // h5 → none 不用清：h5 模式没往原生发过东西。
+    if (wasNative) clearNativeBar()
+    return
+  }
 
   const buttons = [...rightButtons.value]
   for (const button of buttons) publishedIds.add(button.id)
@@ -67,6 +83,16 @@ function handleNativeRightButtonClick(button: NavBarButton): void {
 const rootClass = computed(() => (isH5.value ? 'app-nav-bar--h5' : 'app-nav-bar--empty'))
 
 /**
+ * 指纹覆盖的按钮字段。`satisfies Record<keyof NavBarButton, true>` 让编译器强制穷举：
+ * NavBarButton 新增字段时必须同步这里，否则改该字段不会触发同步。
+ */
+const SYNC_BUTTON_FIELDS = Object.keys({
+  id: true,
+  text: true,
+  icon: true,
+} satisfies Record<keyof NavBarButton, true>) as (keyof NavBarButton)[]
+
+/**
  * 只表达「内容」的同步指纹。
  * 父组件按文档用法写 `:right="[{ ... }]"`，每次重渲染都是个新数组：深监听会让每次渲染
  * 都往原生桥跑一次 setTitle + setRightButtons，这里用内容指纹把相等的重渲染挡掉。
@@ -75,7 +101,7 @@ const syncKey = computed(() =>
   JSON.stringify([
     props.title ?? '',
     resolvedMode.value,
-    rightButtons.value.map((button) => [button.id, button.text, button.icon ?? '']),
+    rightButtons.value.map((button) => SYNC_BUTTON_FIELDS.map((field) => button[field] ?? '')),
   ]),
 )
 
@@ -114,10 +140,7 @@ onBeforeUnmount(() => {
   publishedIds.clear()
   // 原生模式下本组件是原生栏的唯一发布者：卸载时不清空，从带右侧按钮的页面切到
   // 不带 AppNavBar 的页面，原生栏会留着旧标题和已经失效的按钮。
-  if (resolvedMode.value === 'native') {
-    void bridgeNav.setTitle('').catch(ignoreBridgeFailure)
-    void bridgeNav.setRightButtons([]).catch(ignoreBridgeFailure)
-  }
+  if (resolvedMode.value === 'native') clearNativeBar()
   window.removeEventListener('resize', refreshSafeTop)
   window.removeEventListener('orientationchange', refreshSafeTop)
 })

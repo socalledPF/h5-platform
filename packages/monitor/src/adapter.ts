@@ -2,6 +2,7 @@ import type { MonitorAdapter } from '@h5/core'
 import { captureError, reportBridgeError } from './error'
 import { initMonitor } from './init'
 import { markFirstScreen, markFirstScreenApi, reportPerf } from './perf'
+import { markSessionEnd } from './state'
 import { trackEvent } from './track'
 
 /** 业务侧静态配置：core 的 init 只传 appId / env，其余上报参数必须在这里给出。 */
@@ -47,5 +48,7 @@ export function toMonitorAdapter(config: MonitorAdapterConfig = {}): MonitorAdap
     markFirstScreen,
     markFirstScreenApi,
     reportPerf,
+    // 登录态转为“无会话”时 core 调用（401 刷新不调用）：丢弃本登录区间的假名，避免换账号串号。
+    markSessionEnd,
   }
 }

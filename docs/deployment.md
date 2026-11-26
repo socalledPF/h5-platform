@@ -230,7 +230,7 @@ dry-run 会打印：解析结果（应用 / 版本 / commit / 发布标识 / 环
 - `--env`、`--version` 取值合法
 - `--execute` 必须搭配 `--yes`
 - **工作区干净**（`git status --porcelain` 为空，未跟踪文件也算脏）；否则用 `--allow-dirty`
-- **产物不早于 HEAD 提交**（`dist` 内最新 mtime vs `git log -1`）；否则先 `pnpm --filter <pkg> build`，或 `--allow-stale`
+- **产物不早于 HEAD 提交**（`dist/assets/**` 内**最早**的 mtime vs `git log -1`——取最早而不是最新，否则只要重新写一个 `index.html`，整份旧产物就会被当成新鲜）；否则先 `pnpm --filter <pkg> build`，或 `--allow-stale`
 
 > 最后两项在 dry-run 阶段同样执行——它们的作用是防止「昨天构建、今天提交、上传旧包贴新版本号」。
 > 时间粒度是整秒：构建与提交落在同一秒时会被判定为新鲜（最多 1 秒盲区）。
@@ -241,6 +241,11 @@ dry-run 会打印：解析结果（应用 / 版本 / commit / 发布标识 / 环
 
 - `{src}` = `apps/<app>/dist` 的**绝对路径**
 - `{dest}` = `https://cdn.xxx.com/h5/<app>/<version>/`（按 `--env` 切换域名）
+
+替换后的值**已经用 POSIX 单引号转义**（内部单引号会变成 `'\''`），所以模板里不要再给它们加引号，
+路径含空格或撇号也不会断。占位符只做**一次**替换，`{src}` 路径里出现字面量 `{dest}` 不会被二次展开。
+`--version` 与 `apps/<app>/package.json` 的 `version` 都必须是 `x.y.z` 或 `x.y.z-tag` 形式，
+`{dest}` 必须是合法 https URL（含控制字符、查询串或非 ASCII 主机名一律拒绝），否则脚本在上传前就失败。
 
 ```bash
 # rsync 到已挂载的 CDN 发布机目录
@@ -264,7 +269,7 @@ export UPLOAD_CMD="h5-cli upload --dir {src} --base {dest}"
 > `--allow-dirty` / `--allow-stale` 仅为应急通道：绕过它们意味着放弃「产物与 commit 一一对应」这一前提，
 > 事后按版本比对错误率、以及回滚定位都会失去依据。
 
-- [ ] `pnpm typecheck && pnpm lint && pnpm lint:style && pnpm test && pnpm build` 全绿
+- [ ] `pnpm typecheck && pnpm lint && pnpm lint:style && pnpm test && pnpm test:coverage && pnpm build && pnpm size:check` 全绿
 - [ ] 工作区干净（已提交），且 `dist` 由当前 commit 构建（`deploy` 会校验，勿用 `--allow-*` 绕过）
 - [ ] `dist` 内没有 `*.map` 残留，sourcemap 已传监控平台
 - [ ] `UPLOAD_CMD` 的 `{dest}` 是**新版本目录**，不会覆盖旧文件

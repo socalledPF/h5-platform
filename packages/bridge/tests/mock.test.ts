@@ -266,6 +266,40 @@ describe('浏览器 mock', () => {
     await expect(auth.getToken()).resolves.toMatchObject({ token: switched })
   })
 
+  it('登出后再登录推送一次 auth.change，把 core 里清空的 token 纠正过来', async () => {
+    configureMock({})
+    const tokens: Array<string | null> = []
+    on('auth.change', (data) => tokens.push(data.token))
+
+    await auth.login()
+    // 占位会话 → 第一次真实登录：不推送，避免浏览器里点一次登录就整页重载
+    expect(tokens).toHaveLength(0)
+
+    await auth.logout()
+    expect(tokens).toEqual([null])
+
+    await auth.login()
+    // 登出时 core 的 token 已被清成 null，而它的整页刷新条件是 previous !== null && previous !== next，
+    // 因此这次推送不会被当成换账号；不推则 useAuthStore().token 会一直停在 null（登录成功却显示未登录）
+    expect(tokens).toHaveLength(2)
+    const relogin = tokens[1]
+    expect(typeof relogin).toBe('string')
+    expect(relogin).not.toBe('mock-token')
+    await expect(auth.getToken()).resolves.toMatchObject({ token: relogin })
+  })
+
+  it('已登出状态下再次登出不推送事件，避免伪 auth.change', async () => {
+    configureMock({})
+    const received: Array<{ token: string | null }> = []
+    on('auth.change', (data) => received.push(data))
+
+    await auth.logout()
+    expect(received).toEqual([{ token: null }])
+
+    await auth.logout()
+    expect(received).toEqual([{ token: null }])
+  })
+
   it('cancelShare 开启时 share.open 以 1003 拒绝，且不上报监控', async () => {
     const reporter = vi.fn()
     setBridgeErrorReporter(reporter)

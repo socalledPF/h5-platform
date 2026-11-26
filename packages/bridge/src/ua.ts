@@ -7,7 +7,26 @@ const IOS_OS_VERSION_PATTERN = /OS (\d+(?:_\d+)*)/
 
 const ANDROID_OS_VERSION_PATTERN = /Android (\d+(?:\.\d+)*)/
 
-const ANDROID_DEVICE_PATTERN = /Android [^;)]*;\s*([^;)]+)/
+/** `Android x;` 之后的整段机型信息（取到 `)` 为止），逐段挑出真正的机型名。 */
+const ANDROID_DEVICE_SEGMENTS_PATTERN = /Android [^;)]*;([^)]*)/
+
+/**
+ * 可能出现在机型位、却不是机型名的记号：Chrome 精简 UA 的占位符 `K` / `U`、`HarmonyOS` 一类 ROM 名、
+ * WebView 的 `wv` 平台标记。这些值一旦流进设计文档 11.2 的 device 维度，会把机型大盘污染成
+ * 「K 机型占一半」「HarmonyOS 机型」这种无意义的分组。
+ */
+const NON_MODEL_SEGMENTS = new Set([
+  'android',
+  'build',
+  'harmonyos',
+  'k',
+  'linux',
+  'mobile',
+  'safari',
+  'u',
+  'version',
+  'wv',
+])
 
 /**
  * 同步解析 UA，永远不抛错（设计文档 4 / 12.1：UA 访问只允许在本包内）。
@@ -47,11 +66,32 @@ function matchIosDevice(ua: string): string | null {
   return null
 }
 
+/**
+ * 从 `Android x; …` 的各段里挑机型。
+ *
+ * 机型不是「第一段」：Chrome 精简 UA 只有 `Android 10; K`，HarmonyOS / 定制 ROM 会先塞一段 ROM 名
+ * （`Android 12; HarmonyOS; NOH-AL00`），WebView 还会在机型后面补 `wv`。因此按段过滤掉不可信的记号，
+ * 取最后一个可信段——它要么是带连字符的真机型（`NOH-AL00`、`SM-A536B`），要么是 `Build/` 前那段
+ * （`Pixel 6 Build/…`）；一个可信段都没有时说明 UA 根本没给机型，返回 `unknown` 而不是把 `K` 当机型。
+ */
 function matchAndroidDevice(ua: string): string {
-  const raw = matchGroup(ua, ANDROID_DEVICE_PATTERN)
-  if (raw === null) return 'Android'
-  const device = raw.replace(/\s+Build.*$/, '').trim()
-  return device === '' ? 'Android' : device
+  const raw = matchGroup(ua, ANDROID_DEVICE_SEGMENTS_PATTERN)
+  if (raw === null) return 'unknown'
+  const models = raw.split(';').map(normalizeDeviceSegment).filter(isPlausibleModel)
+  return models[models.length - 1] ?? 'unknown'
+}
+
+/** 去掉机型段尾部的 `Build/<fingerprint>` 与首尾空白。 */
+function normalizeDeviceSegment(raw: string): string {
+  return raw.replace(/\s+Build.*$/, '').trim()
+}
+
+function isPlausibleModel(segment: string): boolean {
+  // 单字符段是 Chrome 精简 UA 的占位符（`K`），不是机型
+  if (segment.length < 2) return false
+  if (NON_MODEL_SEGMENTS.has(segment.toLowerCase())) return false
+  // 机型名以大写字母或数字开头；小写开头的是 `wv`、`zh-cn` 一类平台/语言记号
+  return /^[A-Z0-9]/.test(segment)
 }
 
 function matchGroup(source: string, pattern: RegExp): string | null {

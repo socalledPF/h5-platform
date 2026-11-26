@@ -2,6 +2,7 @@ import { auth as bridgeAuth, on } from '@h5/bridge'
 import { createPinia, defineStore, getActivePinia, setActivePinia } from 'pinia'
 import type { Pinia } from 'pinia'
 import { ApiError, UNKNOWN_ERROR_CODE } from './errors'
+import { getMonitorAdapter } from './monitor'
 import type { AuthState } from './types'
 
 /**
@@ -105,10 +106,26 @@ export function applyAuthChange(next: string | null): void {
   const previous = store.token
   if (next === null || next === '') {
     store.clear()
+    notifySessionEnd()
     return
   }
   store.setToken(next, store.expireAt)
   if (previous !== null && previous !== next) reloadPage()
+}
+
+/**
+ * 告诉监控侧「登录态到此为止」（设计文档 6.1 / 11.2）：假名按一段连续非空 token 缓存，
+ * 不在这里作废，下一个账号的错误就会顶上一个账号的假名上报。
+ *
+ * 只覆盖「有 → 无」：401 刷新换 token 走的是 `setToken`（同一个用户），不能途经这里，
+ * 否则每次刷新都会重派假名。监控实现自身抛错、未注入监控、重复登出都不影响登录态。
+ */
+function notifySessionEnd(): void {
+  try {
+    getMonitorAdapter()?.markSessionEnd?.()
+  } catch {
+    // 监控实现自身异常不得影响登录态
+  }
 }
 
 type ReloadHandler = () => void

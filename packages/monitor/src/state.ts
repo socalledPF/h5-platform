@@ -51,11 +51,56 @@ const state: MonitorState = {
 const records: MonitorRecord[] = []
 const recentErrors: string[] = []
 
+/** 一条等待 Sentry 就绪后再上报的异常（启动期采集，公共字段此刻还不真实）。 */
+export interface PendingCapture {
+  error: unknown
+  context?: Record<string, unknown>
+}
+
+const MAX_PENDING_CAPTURES = 50
+const pendingCaptures: PendingCapture[] = []
+
+/**
+ * Sentry 就绪前入队：有界（超出丢弃最旧的），且绝不抛错。
+ *
+ * 启动期的 Bridge 失败（native `app.getInfo` 失败之类的兼容性问题）发生在 `initEnv` 之前，
+ * 那一刻 Sentry 还没初始化、`state.env` 还是 null，直接 capture 只会静默丢掉事件。
+ */
+export function enqueuePendingCapture(entry: PendingCapture): void {
+  pendingCaptures.push(entry)
+  if (pendingCaptures.length > MAX_PENDING_CAPTURES) pendingCaptures.shift()
+}
+
+/**
+ * 取走全部待上报异常并清空。
+ *
+ * 清空发生在捕获**之前**，所以重复 flush（二次 initMonitor、initSentry 重入）不会重复上报。
+ */
+export function takePendingCaptures(): PendingCapture[] {
+  return pendingCaptures.splice(0, pendingCaptures.length)
+}
+
 /**
  * 当前登录区间的假名缓存：一次“连续非空 token 期”内保持不变。
  * token 归零（登出）时丢弃 —— 语义与代价见 resolveUid 的注释。
  */
 let sessionUid: string | null = null
+
+/**
+ * 登录状态转为“无会话”时由 core 通过 `MonitorAdapter.markSessionEnd()` 调用：丢弃本登录区间的假名。
+ *
+ * 这是换账号不串号的**唯一可靠信号**。不能依赖“换账号会整页 reload”这个旧前提：
+ * core/src/auth.ts 的 `applyAuthChange(null)` 只做 `store.clear(); return`，没有 reload，
+ * 而登录页没有任何采集点（repo 内 `trackPageView` / `trackEvent` 调用点为 0），
+ * 所以 A 登录 → 登出 → B 登录这条路径上 monitor 观察不到任何变化，
+ * `sessionUid ??=` 会把 B 的错误继续记在 A 的假名下。
+ *
+ * 只在“转为无会话”时调用，401 刷新（core/src/request.ts 先 refreshToken 再 setToken）不调用，
+ * 因此一次连续非空 token 期内的假名仍然稳定（§11.2 按用户聚合的前提）。
+ */
+export function markSessionEnd(): void {
+  sessionUid = null
+}
 
 /** 当前状态（只读视图，供其它模块读取 appId / dsn / env）。 */
 export function getState(): Readonly<MonitorState> {
@@ -159,6 +204,7 @@ export function collectedRecords(): MonitorRecord[] {
 export function resetMonitor(): void {
   records.length = 0
   recentErrors.length = 0
+  pendingCaptures.length = 0
   sessionUid = null
   state.appId = ''
   state.env = null
@@ -220,19 +266,21 @@ const UID_PREFIX = 'u_'
  *   之后 token 被就地替换（401 刷新，core/src/request.ts:86-87 先 refreshToken() 再
  *   setToken(newToken)）不再重新派生。这正是 §11.2 按用户聚合的前提：刷新若换假名，
  *   同一个用户会被拆成 N 个假名，用户数系统性虚高且几乎无法发现。
- * - token 变为 null 时**丢弃缓存**，下一次登录重新派生。注意丢弃发生在“monitor 观察到 null
- *   的那一刻”，也就是登出窗口内的第一个上报点（登录页的页面埋点、或窗口错误）；monitor 没有
- *   自己的轮询/订阅，两次上报之间发生的 null 它看不到。core/src/auth.ts 的 applyAuthChange
- *   在“换成另一个非空 token（换账号）”时整页 reload，monitor 模块状态随之清空，所以原生推
- *   换账号事件这条主路径天然换假名。
- * - 残余限制（本层无法区分，已按更安全的语义取舍）：monitor 只在**上报点上**读 token，
- *   两次上报之间发生的 A → null → B 它看不到；而“会话过期后由另一个账号重新登录”若不经过
- *   reload、也不经过任何登出窗口内的上报点，就与一次 401 刷新完全同形。此时我们保持旧假名，
- *   代价是**第二个账号的错误被归到第一个账号的假名下**（用户数少计 + 跨账号归因），而不是
- *   把一个账号拆成多个假名（用户数多计）。选前者是因为 §11.2 的聚合口径以“登录区间内稳定”
- *   为前提，刷新即换名会让每张看板的用户数系统性虚高；后者只在 reload 不可用（
- *   setReloadHandler(null)）且登出窗口没有任何上报点的窄路径上发生，真正的修法是由原生补
- *   一个 uid 方法。Bridge 目前没有原生 uid 方法（见 docs/bridge-protocol.md 的方法清单，
+ * - 假名缓存的**清空只有两个触发点**，都表示“这段登录区间结束了”：
+ *   1. core 在登录态转为“无会话”时调用 `markSessionEnd()`（`applyAuthChange()` 的
+ *      `next === null || next === ''` 分支，即 `store.clear()` 那一刻）。这是换账号不串号的
+ *      唯一可靠信号；清除后下一个非空 token 重新派生假名。
+ *   2. monitor 自己在某个上报点上读到 token 为 null（登出窗口内恰有采集点时的兜底）。
+ * - **不要**指望“换账号会整页 reload”这个前提（历史上注释这样写过，是错的）：core/src/auth.ts
+ *   的 `applyAuthChange(null)` 只做 `store.clear(); return`，不 reload；登录页也没有任何采集点
+ *   （repo 内 `trackPageView` / `trackEvent` 调用点为 0）。所以 A 登录 → 登出 → B 登录这条
+ *   路径上，若没有 `markSessionEnd()`，`sessionUid ??=` 会把 B 的错误继续记在 A 的假名下。
+ * - 残余限制（本层无法区分，已按更安全的语义取舍）：monitor 只在**上报点上**读 token，也只在
+ *   core 主动调用 `markSessionEnd()` 时才知道会话结束。因此“token 被替换、中间没有经过任何
+ *   会话结束信号”与一次 401 刷新完全同形，此时保持旧假名 —— 这是刻意的：宁可少计用户，
+ *   也不要把一个账号拆成多个假名让每张看板的用户数系统性虚高。代价是缺少 `markSessionEnd()`
+ *   的旧版 core 上，换账号仍可能把 B 的错误归到 A 的假名下。
+ *   彻底的修法是由原生补一个 uid 方法；Bridge 目前没有（见 docs/bridge-protocol.md 的方法清单，
  *   且与客户端约定不新增），跨会话/跨设备稳定标识必须等原生补该方法。
  * - 未登录（无 token）时为 `'anon'`，`uidSource` 标记为 `'anon'`。
  * - 哈希是**无盐**的：持有候选 token 的一方可以对候选逐一哈希做**确认**（off-line 比对），

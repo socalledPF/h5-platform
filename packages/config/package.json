@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "typecheck": "node -e \"const fs=require('node:fs');const ts=fs.readdirSync('.',{recursive:true}).filter(f=>/\\.(ts|tsx|vue)$/.test(f)&&!f.includes('node_modules'));if(ts.length){console.error('[@h5/config] 本包只有 .mjs 源码、没有 tsconfig，做不了真实类型检查；现在出现了 TS/Vue 源码：'+ts.join(', ')+' —— 请补一套真正的 typecheck 脚本，不要留着这个守卫');process.exit(1)}console.log('[@h5/config] 无 TS/Vue 源码，typecheck 显式跳过（已校验前提，不是静默跳过）')\""
+    "typecheck": "node -e \"const fs=require('node:fs');const ts=fs.readdirSync('.',{recursive:true}).filter(f=>/\\.(ts|tsx|mts|cts|vue)$/.test(f)&&!f.includes('node_modules'));if(ts.length){console.error('[@h5/config] 本包只有 .mjs 源码、没有 tsconfig，做不了真实类型检查；现在出现了 TS/Vue 源码：'+ts.join(', ')+' —— 请补一套真正的 typecheck 脚本，不要留着这个守卫');process.exit(1)}console.log('[@h5/config] 无 TS/Vue 源码，typecheck 显式跳过（已校验前提，不是静默跳过）')\""
   },
   "exports": {
     ".": "./vite.mjs",

@@ -9,7 +9,13 @@
 export const PACKAGE_NAME = '@h5/bridge'
 
 export { app, auth, device, media, nav, share, storage, track, ui } from './api'
-export { canIUse } from './capabilities'
+/**
+ * 能力探测：`canIUse` 同步判断，`loadCapabilities` 显式拉取，`resetCapabilities` 清空缓存与隐式探测预算。
+ *
+ * `resetCapabilities` 是「回到前台重新探测」「App 升级后重连」唯一的重置入口（见 capabilities.ts），
+ * 因此必须从包入口导出——业务代码不得直接 import 本包内部模块。
+ */
+export { canIUse, loadCapabilities, resetCapabilities } from './capabilities'
 export { isAvailable } from './channel'
 export { invoke, off, on } from './core'
 export { BridgeError, CODE, isReportableBridgeFailure, setBridgeErrorReporter } from './error'

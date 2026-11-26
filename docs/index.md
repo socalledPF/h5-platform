@@ -66,4 +66,4 @@ pnpm run deploy --app <name> # 发布到 CDN（默认 dry-run）
 pnpm docs:dev            # 本地预览本文档站
 ```
 
-提交前跑一遍：`pnpm typecheck && pnpm lint && pnpm lint:style && pnpm test && pnpm build`。
+提交前跑一遍：`pnpm typecheck && pnpm lint && pnpm lint:style && pnpm test && pnpm test:coverage && pnpm build && pnpm size:check`。
